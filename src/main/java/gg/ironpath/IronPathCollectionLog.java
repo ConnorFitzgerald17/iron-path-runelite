@@ -13,9 +13,7 @@ import net.runelite.api.Client;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.ScriptEvent;
 import net.runelite.api.StructComposition;
-import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
-import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
 final class IronPathCollectionLog

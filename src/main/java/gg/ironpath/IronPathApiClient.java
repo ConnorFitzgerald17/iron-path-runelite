@@ -31,7 +31,7 @@ final class IronPathApiClient
 
     void exchangeCode(String code, String characterName, Consumer<IronPathDtos.LinkResponse> callback)
     {
-        IronPathDtos.LinkRequest payload = new IronPathDtos.LinkRequest(code, characterName, "0.4.0");
+        IronPathDtos.LinkRequest payload = new IronPathDtos.LinkRequest(code, characterName, "0.4.1");
         post("/api/plugin/v1/link/exchange", null, gson.toJson(payload), response ->
         {
             IronPathDtos.LinkResponse result = response.body == null
@@ -105,7 +105,7 @@ final class IronPathApiClient
         String origin = config.apiOrigin().replaceAll("/+$", "");
         Request.Builder builder = new Request.Builder()
             .url(origin + path)
-            .header("User-Agent", "IronPath-RuneLite/0.4.0");
+            .header("User-Agent", "IronPath-RuneLite/0.4.1");
         if (token != null && !token.isEmpty())
         {
             builder.header("Authorization", "Bearer " + token);

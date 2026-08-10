@@ -27,7 +27,7 @@ For IDE configuration on this Intel Mac, the installed JDK home is `/usr/local/o
 
 This compiles the plugin and runs its unit tests without installing or launching the RuneLite desktop client. When you are ready to test inside RuneLite developer mode, use `./gradlew run`.
 
-For local web development, set **API origin** to `http://localhost:3000`. Generate a linking code on the web, paste it into plugin settings, and press **Connect account**. With the web app in demo mode, its exchange endpoint returns the scoped `demo-device-token`.
+For local web development, set **API origin** to `http://localhost:3000`. Generate a verification code on the web, paste it into plugin settings, log into the character being claimed, and press **Connect**. The verified RuneLite identity creates the journal on first sync. With the web app in demo mode, its exchange endpoint returns the scoped `demo-device-token`.
 
 ## Sync behavior
 
