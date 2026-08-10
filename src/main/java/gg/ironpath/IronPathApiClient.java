@@ -31,7 +31,7 @@ final class IronPathApiClient
 
     void exchangeCode(String code, String characterName, Consumer<IronPathDtos.LinkResponse> callback)
     {
-        IronPathDtos.LinkRequest payload = new IronPathDtos.LinkRequest(code, characterName, "0.1.0");
+        IronPathDtos.LinkRequest payload = new IronPathDtos.LinkRequest(code, characterName, "0.4.0");
         post("/api/plugin/v1/link/exchange", null, gson.toJson(payload), response ->
         {
             IronPathDtos.LinkResponse result = response.body == null
@@ -53,6 +53,11 @@ final class IronPathApiClient
     void sendLoot(String token, List<IronPathDtos.LootEvent> events, Consumer<Boolean> callback)
     {
         post("/api/plugin/v1/loot-events", token, gson.toJson(new IronPathDtos.LootBatch(events)), response -> callback.accept(response.success));
+    }
+
+    void sendCollectionLogSection(String token, IronPathDtos.CollectionLogSection section, Consumer<Boolean> callback)
+    {
+        post("/api/plugin/v1/collection-log", token, gson.toJson(section), response -> callback.accept(response.success));
     }
 
     void fetchGoals(String token, Consumer<IronPathDtos.GoalsResponse> callback)
@@ -82,6 +87,14 @@ final class IronPathApiClient
         });
     }
 
+    void updateGoalStatus(String token, String goalId, String status, Consumer<Boolean> callback)
+    {
+        Request request = requestBuilder("/api/plugin/v1/goals/" + goalId, token)
+            .patch(RequestBody.create(JSON, gson.toJson(new IronPathDtos.GoalStatusUpdate(status))))
+            .build();
+        send(request, response -> callback.accept(response.success));
+    }
+
     void unlink(String token, Consumer<Boolean> callback)
     {
         post("/api/plugin/v1/unlink", token, "{}", response -> callback.accept(response.success));
@@ -92,7 +105,7 @@ final class IronPathApiClient
         String origin = config.apiOrigin().replaceAll("/+$", "");
         Request.Builder builder = new Request.Builder()
             .url(origin + path)
-            .header("User-Agent", "IronPath-RuneLite/0.1.0");
+            .header("User-Agent", "IronPath-RuneLite/0.4.0");
         if (token != null && !token.isEmpty())
         {
             builder.header("Authorization", "Bearer " + token);
@@ -103,6 +116,11 @@ final class IronPathApiClient
     private void post(String path, String token, String json, Consumer<ApiResponse> callback)
     {
         Request request = requestBuilder(path, token).post(RequestBody.create(JSON, json)).build();
+        send(request, callback);
+    }
+
+    private void send(Request request, Consumer<ApiResponse> callback)
+    {
         httpClient.newCall(request).enqueue(new Callback()
         {
             @Override

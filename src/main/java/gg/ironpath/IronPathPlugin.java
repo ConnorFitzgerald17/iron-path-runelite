@@ -10,13 +10,20 @@ import java.awt.image.BufferedImage;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.inject.Inject;
@@ -29,11 +36,17 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
+import net.runelite.api.vars.AccountType;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.events.WidgetLoaded;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemStack;
@@ -44,15 +57,21 @@ import net.runelite.client.ui.NavigationButton;
 
 @PluginDescriptor(
     name = "Iron Path",
-    description = "Sync quest goals, item grinds, notable drops, and banked experience",
-    tags = {"ironman", "goals", "quests", "loot", "banked xp"}
+    description = "Sync quest goals, skill grinds, collection logs, notable drops, and banked experience",
+    tags = {"ironman", "goals", "quests", "loot", "collection log", "banked xp"}
 )
 public class IronPathPlugin extends Plugin
 {
     private static final Logger LOGGER = Logger.getLogger(IronPathPlugin.class.getName());
     private static final String TOKEN_KEY = "deviceToken";
     private static final String QUEUE_KEY = "pendingLoot";
-    private static final int MAX_PENDING_LOOT = 250;
+    private static final String KILL_COUNTS_KEY = "killCounts";
+    private static final String LAST_SYNC_KEY = "lastSuccessfulSync";
+    private static final String COLLECTION_QUEUE_KEY = "pendingCollectionLog";
+    private static final int MAX_PENDING_LOOT = 500;
+    private static final int LOOT_BATCH_SIZE = 100;
+    private static final int SYNC_INTERVAL_MINUTES = 2;
+    private static final int GOAL_REFRESH_INTERVAL_SECONDS = 15;
 
     @Inject private Client client;
     @Inject private ClientThread clientThread;
@@ -65,12 +84,27 @@ public class IronPathPlugin extends Plugin
 
     private final Map<String, Map<Integer, Integer>> containerSnapshots = new HashMap<>();
     private final List<IronPathDtos.LootEvent> pendingLoot = new ArrayList<>();
+    private final Map<Integer, IronPathDtos.KillCount> trackedKills = new HashMap<>();
+    private final Map<String, Integer> liveSkillLevels = new ConcurrentHashMap<>();
+    private final Map<String, Integer> liveSkillXps = new ConcurrentHashMap<>();
+    private final Map<String, String> liveQuestStates = new ConcurrentHashMap<>();
+    private final Map<String, IronPathDtos.CollectionLogSection> pendingCollectionLog = new HashMap<>();
+    private final AtomicBoolean snapshotUploadInFlight = new AtomicBoolean();
+    private final AtomicBoolean goalRefreshInFlight = new AtomicBoolean();
+    private final AtomicLong goalRefreshSequence = new AtomicLong();
     private IronPathPanel panel;
     private NavigationButton navigationButton;
     private ScheduledFuture<?> periodicSync;
+    private ScheduledFuture<?> periodicGoalRefresh;
     private ScheduledFuture<?> bankDebounce;
-    private boolean lootUploadInFlight;
+    private volatile boolean lootUploadInFlight;
+    private volatile boolean collectionUploadInFlight;
+    private volatile List<IronPathDtos.GoalSummary> currentGoals = Collections.emptyList();
+    private volatile Instant lastSuccessfulSync;
+    private volatile long profileGeneration;
+    private volatile boolean running;
     private int observedKills;
+    private IronPathCollectionLog collectionLog;
 
     @Provides
     IronPathConfig provideConfig(ConfigManager manager)
@@ -81,8 +115,10 @@ public class IronPathPlugin extends Plugin
     @Override
     protected void startUp()
     {
+        running = true;
         panel = new IronPathPanel();
-        panel.setActions(this::connect, () -> clientThread.invokeLater(this::syncSnapshot));
+        collectionLog = new IronPathCollectionLog(client, this::queueCollectionLog);
+        panel.setActions(this::connect, this::requestFullSync, this::updateGoalStatus);
         navigationButton = NavigationButton.builder()
             .tooltip("Iron Path")
             .icon(createPanelIcon())
@@ -90,30 +126,50 @@ public class IronPathPlugin extends Plugin
             .panel(panel)
             .build();
         clientToolbar.addNavigation(navigationButton);
-        loadPendingLoot();
+        loadProfileState();
         refreshConnectionState();
+        updatePanelData();
 
         periodicSync = executor.scheduleWithFixedDelay(() ->
         {
             if (config.autoSync())
             {
-                clientThread.invokeLater(this::syncSnapshot);
-                refreshGoals();
-                flushPendingLoot();
+                requestFullSync();
             }
-        }, 20, 5, TimeUnit.MINUTES);
+        }, SYNC_INTERVAL_MINUTES, SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES);
+        periodicGoalRefresh = executor.scheduleWithFixedDelay(() ->
+        {
+            if (config.autoSync())
+            {
+                refreshGoals();
+            }
+        }, GOAL_REFRESH_INTERVAL_SECONDS, GOAL_REFRESH_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        refreshGoals();
     }
 
     @Override
     protected void shutDown()
     {
+        running = false;
         if (periodicSync != null) periodicSync.cancel(false);
+        if (periodicGoalRefresh != null) periodicGoalRefresh.cancel(false);
         if (bankDebounce != null) bankDebounce.cancel(false);
+        goalRefreshSequence.incrementAndGet();
+        goalRefreshInFlight.set(false);
         savePendingLoot();
+        saveKillCounts();
+        savePendingCollectionLog();
         if (navigationButton != null) clientToolbar.removeNavigation(navigationButton);
         panel = null;
         navigationButton = null;
         containerSnapshots.clear();
+        trackedKills.clear();
+        liveSkillLevels.clear();
+        liveSkillXps.clear();
+        liveQuestStates.clear();
+        pendingCollectionLog.clear();
+        if (collectionLog != null) collectionLog.reset();
+        currentGoals = Collections.emptyList();
     }
 
     @Subscribe
@@ -121,29 +177,79 @@ public class IronPathPlugin extends Plugin
     {
         if (event.getGameState() == GameState.LOGGED_IN)
         {
-            executor.schedule(() -> clientThread.invokeLater(() ->
-            {
-                captureLiveContainers();
-                syncSnapshot();
-                refreshGoals();
-                flushPendingLoot();
-            }), 3, TimeUnit.SECONDS);
+            executor.schedule(this::requestFullSync, 3, TimeUnit.SECONDS);
+        }
+    }
+
+    @Subscribe
+    public void onWidgetLoaded(WidgetLoaded event)
+    {
+        if (event.getGroupId() != InterfaceID.COLLECTION || collectionLog == null) return;
+        clientThread.invokeLater(() ->
+        {
+            collectionLog.collectionOpened();
+            if (panel != null) panel.setCollectionLogState(collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog.isAwaitingSearch());
+            return true;
+        });
+    }
+
+    @Subscribe
+    public void onScriptPreFired(ScriptPreFired event)
+    {
+        if (collectionLog != null) collectionLog.onScriptPreFired(event.getScriptId(), event.getScriptEvent());
+    }
+
+    @Subscribe
+    public void onGameTick(GameTick event)
+    {
+        if (collectionLog != null && collectionLog.onGameTick() && panel != null)
+        {
+            panel.setCollectionLogState(collectionLog.sectionCount(), pendingCollectionLogSize(), false);
         }
     }
 
     @Subscribe
     public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
     {
+        profileGeneration++;
+        snapshotUploadInFlight.set(false);
+        lootUploadInFlight = false;
+        collectionUploadInFlight = false;
+        goalRefreshSequence.incrementAndGet();
+        goalRefreshInFlight.set(false);
         synchronized (pendingLoot)
         {
             pendingLoot.clear();
-            loadPendingLoot();
         }
+        synchronized (trackedKills)
+        {
+            trackedKills.clear();
+        }
+        synchronized (pendingCollectionLog)
+        {
+            pendingCollectionLog.clear();
+        }
+        loadProfileState();
         containerSnapshots.clear();
+        liveSkillLevels.clear();
+        liveSkillXps.clear();
+        liveQuestStates.clear();
+        if (collectionLog != null) collectionLog.reset();
+        currentGoals = Collections.emptyList();
         observedKills = 0;
-        if (panel != null) panel.setObservedKills(0);
         refreshConnectionState();
-        refreshGoals();
+        updatePanelData();
+        requestFullSync();
+    }
+
+    @Subscribe
+    public void onConfigChanged(ConfigChanged event)
+    {
+        if (IronPathConfig.GROUP.equals(event.getGroup()))
+        {
+            updatePanelData();
+            if (config.autoSync()) refreshGoals();
+        }
     }
 
     @Subscribe
@@ -177,17 +283,26 @@ public class IronPathPlugin extends Plugin
                 items.add(new IronPathDtos.LootItem(stack.getId(), stack.getQuantity()));
             }
         }
+        String occurredAt = Instant.now().toString();
+        int npcId = event.getNpc().getId();
+        String npcName = event.getNpc().getName() == null ? "Unknown NPC" : event.getNpc().getName();
         IronPathDtos.LootEvent loot = new IronPathDtos.LootEvent(
-            UUID.randomUUID().toString(), Instant.now().toString(), event.getNpc().getId(),
-            event.getNpc().getName() == null ? "Unknown NPC" : event.getNpc().getName(), items);
+            UUID.randomUUID().toString(), occurredAt, npcId, npcName, items);
         synchronized (pendingLoot)
         {
             pendingLoot.add(loot);
             while (pendingLoot.size() > MAX_PENDING_LOOT) pendingLoot.remove(0);
             savePendingLoot();
         }
+        synchronized (trackedKills)
+        {
+            IronPathDtos.KillCount count = trackedKills.computeIfAbsent(npcId,
+                ignored -> new IronPathDtos.KillCount(npcId, npcName, 0, occurredAt));
+            count.record(npcName, occurredAt);
+            saveKillCounts();
+        }
         observedKills++;
-        if (panel != null) panel.setObservedKills(observedKills);
+        updatePanelData();
         flushPendingLoot();
     }
 
@@ -204,19 +319,21 @@ public class IronPathPlugin extends Plugin
             panel.setConnected(false, client.getLocalPlayer().getName(), "Add the website linking code in settings");
             return;
         }
-        panel.setConnected(false, client.getLocalPlayer().getName(), "Exchanging linking code…");
-        apiClient.exchangeCode(code, client.getLocalPlayer().getName(), response ->
+        String characterName = client.getLocalPlayer().getName();
+        long requestGeneration = profileGeneration;
+        panel.setConnected(false, characterName, "Exchanging linking code…");
+        apiClient.exchangeCode(code, characterName, response ->
         {
+            if (requestGeneration != profileGeneration) return;
             if (response == null || response.token == null)
             {
-                panel.setConnected(false, client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName(), response == null || response.error == null ? "Connection failed" : response.error);
+                panel.setConnected(false, characterName,
+                    response == null || response.error == null ? "Connection failed" : response.error);
                 return;
             }
             configManager.setRSProfileConfiguration(IronPathConfig.GROUP, TOKEN_KEY, response.token);
-            panel.setConnected(true, client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName(), "Connected · first sync pending");
-            clientThread.invokeLater(this::syncSnapshot);
-            refreshGoals();
-            flushPendingLoot();
+            panel.setConnected(true, characterName, "Connected · first sync pending");
+            requestFullSync();
         });
     }
 
@@ -225,26 +342,46 @@ public class IronPathPlugin extends Plugin
         if (panel == null) return;
         String token = token();
         String name = client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName();
-        panel.setConnected(token != null, name, token == null ? "Not linked" : "Connected · waiting for game data");
+        panel.setConnected(token != null, name, token == null ? "Not linked" : connectedDetail());
+        panel.setSyncState(lastSuccessfulSync, snapshotUploadInFlight.get(), pendingLootSize(), config.autoSync());
+    }
+
+    private void requestFullSync()
+    {
+        if (!running) return;
+        clientThread.invokeLater(this::syncSnapshot);
+        refreshGoals();
+        flushPendingLoot();
+        flushPendingCollectionLog();
     }
 
     private void syncSnapshot()
     {
         String token = token();
         if (token == null || client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null) return;
+        if (!snapshotUploadInFlight.compareAndSet(false, true)) return;
         captureLiveContainers();
 
         List<IronPathDtos.SkillRecord> skills = new ArrayList<>();
+        liveSkillLevels.clear();
+        liveSkillXps.clear();
         for (Skill skill : Skill.values())
         {
             if (skill == Skill.OVERALL) continue;
-            skills.add(new IronPathDtos.SkillRecord(skill.getName(), client.getRealSkillLevel(skill), client.getSkillExperience(skill)));
+            int level = client.getRealSkillLevel(skill);
+            int xp = client.getSkillExperience(skill);
+            skills.add(new IronPathDtos.SkillRecord(skill.getName(), level, xp));
+            liveSkillLevels.put(normalize(skill.getName()), level);
+            liveSkillXps.put(normalize(skill.getName()), xp);
         }
 
         List<IronPathDtos.QuestRecord> quests = new ArrayList<>();
+        liveQuestStates.clear();
         for (Quest quest : Quest.values())
         {
-            quests.add(new IronPathDtos.QuestRecord(quest.getName(), questState(quest.getState(client))));
+            String state = questState(quest.getState(client));
+            quests.add(new IronPathDtos.QuestRecord(quest.getName(), state));
+            liveQuestStates.put(normalize(quest.getName()), state);
         }
 
         List<IronPathDtos.ItemRecord> items = new ArrayList<>();
@@ -253,24 +390,96 @@ public class IronPathPlugin extends Plugin
             entry.getValue().forEach((itemId, quantity) -> items.add(new IronPathDtos.ItemRecord(itemId, quantity, entry.getKey())));
         }
 
+        String characterName = client.getLocalPlayer().getName();
+        long requestGeneration = profileGeneration;
         IronPathDtos.Snapshot snapshot = new IronPathDtos.Snapshot(
-            Instant.now().toString(), client.getLocalPlayer().getName(), skills, quests, items);
-        panel.setConnected(true, client.getLocalPlayer().getName(), "Uploading snapshot…");
-        apiClient.sendSnapshot(token, snapshot, success -> panel.setConnected(
-            success, client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName(),
-            success ? "Synced just now" : "Sync failed · will retry"));
+            Instant.now().toString(), characterName, accountType(client.getAccountType()),
+            client.getLocalPlayer().getCombatLevel(), skills, quests, items);
+        panel.setConnected(true, characterName, "Uploading snapshot…");
+        panel.setSyncState(lastSuccessfulSync, true, pendingLootSize(), config.autoSync());
+        updateGoalProgress();
+        apiClient.sendSnapshot(token, snapshot, success ->
+        {
+            if (requestGeneration != profileGeneration) return;
+            snapshotUploadInFlight.set(false);
+            if (success)
+            {
+                lastSuccessfulSync = Instant.now();
+                saveLastSuccessfulSync();
+            }
+            if (panel != null)
+            {
+                panel.setConnected(true, characterName, success
+                    ? "Connected · dashboard is up to date" : "Sync failed · use Sync now to retry");
+                panel.setSyncState(lastSuccessfulSync, false, pendingLootSize(), config.autoSync());
+            }
+        });
     }
 
     private void refreshGoals()
     {
         String token = token();
-        if (token == null || panel == null) return;
+        if (!running || token == null || panel == null) return;
+        if (!goalRefreshInFlight.compareAndSet(false, true)) return;
+        long requestGeneration = profileGeneration;
+        long requestSequence = goalRefreshSequence.incrementAndGet();
         apiClient.fetchGoals(token, response ->
         {
+            if (requestSequence != goalRefreshSequence.get()) return;
+            goalRefreshInFlight.set(false);
+            if (requestGeneration != profileGeneration) return;
             if (response != null)
             {
-                panel.setGoals(response.goals);
-                if (response.characterName != null) panel.setConnected(true, response.characterName, "Connected");
+                currentGoals = response.goals == null ? Collections.emptyList() : new ArrayList<>(response.goals);
+                updateGoalProgress();
+                if (response.characterName != null)
+                {
+                    panel.setConnected(true, response.characterName,
+                        snapshotUploadInFlight.get() ? "Syncing dashboard…" : connectedDetail());
+                }
+            }
+        });
+    }
+
+    private void updateGoalStatus(String goalId, String status, java.util.function.Consumer<Boolean> callback)
+    {
+        String token = token();
+        if (token == null || goalId == null || (!"active".equals(status) && !"complete".equals(status)))
+        {
+            callback.accept(false);
+            return;
+        }
+
+        goalRefreshSequence.incrementAndGet();
+        goalRefreshInFlight.set(false);
+        long requestGeneration = profileGeneration;
+        apiClient.updateGoalStatus(token, goalId, status, success ->
+        {
+            if (requestGeneration != profileGeneration)
+            {
+                callback.accept(false);
+                return;
+            }
+            if (success)
+            {
+                List<IronPathDtos.GoalSummary> updated = new ArrayList<>(currentGoals);
+                for (IronPathDtos.GoalSummary goal : updated)
+                {
+                    if (goalId.equals(goal.id)) goal.status = status;
+                }
+                currentGoals = updated;
+                updateGoalProgress();
+                callback.accept(true);
+                refreshGoals();
+            }
+            else
+            {
+                if (panel != null)
+                {
+                    String name = client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName();
+                    panel.setConnected(true, name, "Goal update failed · retry the action");
+                }
+                callback.accept(false);
             }
         });
     }
@@ -278,26 +487,76 @@ public class IronPathPlugin extends Plugin
     private void flushPendingLoot()
     {
         String token = token();
-        if (token == null || lootUploadInFlight) return;
+        if (token == null) return;
         List<IronPathDtos.LootEvent> batch;
         synchronized (pendingLoot)
         {
-            if (pendingLoot.isEmpty()) return;
-            batch = new ArrayList<>(pendingLoot);
+            if (pendingLoot.isEmpty() || lootUploadInFlight) return;
+            batch = new ArrayList<>(pendingLoot.subList(0, Math.min(LOOT_BATCH_SIZE, pendingLoot.size())));
             lootUploadInFlight = true;
         }
+        long requestGeneration = profileGeneration;
         apiClient.sendLoot(token, batch, success ->
         {
+            if (requestGeneration != profileGeneration) return;
+            boolean hasMore;
             synchronized (pendingLoot)
             {
                 if (success)
                 {
-                    int remove = Math.min(batch.size(), pendingLoot.size());
-                    pendingLoot.subList(0, remove).clear();
+                    Set<String> acceptedIds = new HashSet<>();
+                    for (IronPathDtos.LootEvent event : batch) acceptedIds.add(event.eventId);
+                    pendingLoot.removeIf(event -> acceptedIds.contains(event.eventId));
                     savePendingLoot();
                 }
                 lootUploadInFlight = false;
+                hasMore = success && !pendingLoot.isEmpty();
             }
+            updatePanelData();
+            if (hasMore) flushPendingLoot();
+        });
+    }
+
+    private void queueCollectionLog(List<IronPathDtos.CollectionLogSection> sections)
+    {
+        synchronized (pendingCollectionLog)
+        {
+            for (IronPathDtos.CollectionLogSection section : sections) pendingCollectionLog.put(section.key, section);
+            savePendingCollectionLog();
+        }
+        if (panel != null) panel.setCollectionLogState(sections.size(), pendingCollectionLogSize(), false);
+        flushPendingCollectionLog();
+    }
+
+    private void flushPendingCollectionLog()
+    {
+        String token = token();
+        if (token == null) return;
+        IronPathDtos.CollectionLogSection section;
+        synchronized (pendingCollectionLog)
+        {
+            if (collectionUploadInFlight || pendingCollectionLog.isEmpty()) return;
+            section = pendingCollectionLog.values().iterator().next();
+            collectionUploadInFlight = true;
+        }
+        long requestGeneration = profileGeneration;
+        apiClient.sendCollectionLogSection(token, section, success ->
+        {
+            if (requestGeneration != profileGeneration) return;
+            boolean hasMore;
+            synchronized (pendingCollectionLog)
+            {
+                if (success)
+                {
+                    IronPathDtos.CollectionLogSection current = pendingCollectionLog.get(section.key);
+                    if (current != null && current.capturedAt.equals(section.capturedAt)) pendingCollectionLog.remove(section.key);
+                    savePendingCollectionLog();
+                }
+                collectionUploadInFlight = false;
+                hasMore = success && !pendingCollectionLog.isEmpty();
+            }
+            if (panel != null) panel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), false);
+            if (hasMore) flushPendingCollectionLog();
         });
     }
 
@@ -346,7 +605,11 @@ public class IronPathPlugin extends Plugin
         try
         {
             List<IronPathDtos.LootEvent> stored = gson.fromJson(json, new TypeToken<List<IronPathDtos.LootEvent>>() {}.getType());
-            if (stored != null) pendingLoot.addAll(stored);
+            if (stored != null)
+            {
+                int from = Math.max(0, stored.size() - MAX_PENDING_LOOT);
+                pendingLoot.addAll(stored.subList(from, stored.size()));
+            }
         }
         catch (RuntimeException error)
         {
@@ -366,6 +629,178 @@ public class IronPathPlugin extends Plugin
         {
             configManager.setRSProfileConfiguration(IronPathConfig.GROUP, QUEUE_KEY, gson.toJson(pendingLoot));
         }
+    }
+
+    private void loadProfileState()
+    {
+        loadPendingLoot();
+        loadPendingCollectionLog();
+        loadKillCounts();
+        String storedSync = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, LAST_SYNC_KEY);
+        try
+        {
+            lastSuccessfulSync = storedSync == null ? null : Instant.parse(storedSync);
+        }
+        catch (RuntimeException ignored)
+        {
+            lastSuccessfulSync = null;
+        }
+    }
+
+    private void loadPendingCollectionLog()
+    {
+        String json = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY);
+        if (json == null || json.isEmpty()) return;
+        try
+        {
+            List<IronPathDtos.CollectionLogSection> stored = gson.fromJson(json,
+                new TypeToken<List<IronPathDtos.CollectionLogSection>>() {}.getType());
+            if (stored != null)
+            {
+                synchronized (pendingCollectionLog)
+                {
+                    for (IronPathDtos.CollectionLogSection section : stored)
+                    {
+                        if (section != null && section.key != null) pendingCollectionLog.put(section.key, section);
+                    }
+                }
+            }
+        }
+        catch (RuntimeException error)
+        {
+            LOGGER.log(Level.WARNING, "Discarding malformed collection-log queue", error);
+            configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY);
+        }
+    }
+
+    private void savePendingCollectionLog()
+    {
+        if (configManager.getRSProfileKey() == null) return;
+        if (pendingCollectionLog.isEmpty()) configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY);
+        else configManager.setRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY,
+            gson.toJson(new ArrayList<>(pendingCollectionLog.values())));
+    }
+
+    private void loadKillCounts()
+    {
+        String json = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, KILL_COUNTS_KEY);
+        if (json == null || json.isEmpty()) return;
+        try
+        {
+            List<IronPathDtos.KillCount> stored = gson.fromJson(json,
+                new TypeToken<List<IronPathDtos.KillCount>>() {}.getType());
+            if (stored == null) return;
+            synchronized (trackedKills)
+            {
+                for (IronPathDtos.KillCount count : stored)
+                {
+                    if (count != null && count.npcId > 0 && count.count > 0)
+                    {
+                        trackedKills.put(count.npcId, count);
+                    }
+                }
+            }
+        }
+        catch (RuntimeException error)
+        {
+            LOGGER.log(Level.WARNING, "Discarding malformed Iron Path kill counts", error);
+            configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, KILL_COUNTS_KEY);
+        }
+    }
+
+    private void saveKillCounts()
+    {
+        if (configManager.getRSProfileKey() == null) return;
+        if (trackedKills.isEmpty())
+        {
+            configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, KILL_COUNTS_KEY);
+        }
+        else
+        {
+            configManager.setRSProfileConfiguration(IronPathConfig.GROUP, KILL_COUNTS_KEY,
+                gson.toJson(new ArrayList<>(trackedKills.values())));
+        }
+    }
+
+    private void saveLastSuccessfulSync()
+    {
+        if (configManager.getRSProfileKey() != null && lastSuccessfulSync != null)
+        {
+            configManager.setRSProfileConfiguration(IronPathConfig.GROUP, LAST_SYNC_KEY,
+                lastSuccessfulSync.toString());
+        }
+    }
+
+    private void updatePanelData()
+    {
+        IronPathPanel currentPanel = panel;
+        if (currentPanel == null) return;
+        List<IronPathDtos.KillCount> recent;
+        synchronized (trackedKills)
+        {
+            recent = new ArrayList<>(trackedKills.values());
+        }
+        recent.sort(Comparator.comparing((IronPathDtos.KillCount kill) ->
+            kill.lastKilledAt == null ? "" : kill.lastKilledAt).reversed());
+        currentPanel.setKillActivity(observedKills, pendingLootSize(), recent);
+        currentPanel.setSyncState(lastSuccessfulSync, snapshotUploadInFlight.get(), pendingLootSize(), config.autoSync());
+        currentPanel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog != null && collectionLog.isAwaitingSearch());
+        updateGoalProgress();
+    }
+
+    private void updateGoalProgress()
+    {
+        IronPathPanel currentPanel = panel;
+        if (currentPanel == null) return;
+        List<IronPathDtos.KillCount> kills;
+        synchronized (trackedKills)
+        {
+            kills = new ArrayList<>(trackedKills.values());
+        }
+        List<IronPathGoalProgress> progress = new ArrayList<>();
+        for (IronPathDtos.GoalSummary goal : currentGoals)
+        {
+            progress.add(IronPathGoalProgress.from(goal, kills,
+                new HashMap<>(liveSkillLevels), new HashMap<>(liveSkillXps), new HashMap<>(liveQuestStates)));
+        }
+        currentPanel.setGoals(progress);
+    }
+
+    private int pendingLootSize()
+    {
+        synchronized (pendingLoot)
+        {
+            return pendingLoot.size();
+        }
+    }
+
+    private int pendingCollectionLogSize()
+    {
+        synchronized (pendingCollectionLog)
+        {
+            return pendingCollectionLog.size();
+        }
+    }
+
+    private String connectedDetail()
+    {
+        return config.autoSync() ? "Connected · automatic sync enabled" : "Connected · manual sync only";
+    }
+
+    private static String accountType(AccountType type)
+    {
+        if (type == AccountType.IRONMAN) return "Ironman";
+        if (type == AccountType.HARDCORE_IRONMAN) return "Hardcore Ironman";
+        if (type == AccountType.ULTIMATE_IRONMAN) return "Ultimate Ironman";
+        if (type == AccountType.GROUP_IRONMAN) return "Group Ironman";
+        if (type == AccountType.HARDCORE_GROUP_IRONMAN) return "Hardcore Group Ironman";
+        return "Normal";
+    }
+
+    private static String normalize(String value)
+    {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ENGLISH)
+            .replace('_', ' ').replace('-', ' ').replaceAll("\\s+", " ");
     }
 
     private static String questState(QuestState state)

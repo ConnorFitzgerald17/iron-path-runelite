@@ -34,7 +34,7 @@ public interface IronPathConfig extends Config
     @ConfigItem(
         keyName = "autoSync",
         name = "Automatic sync",
-        description = "Sync skills and quests every five minutes and bank items when the bank is opened",
+        description = "Refresh goals every 15 seconds, sync progress every two minutes, and sync bank changes shortly after they occur",
         position = 2
     )
     default boolean autoSync()

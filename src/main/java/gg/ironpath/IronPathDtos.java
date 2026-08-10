@@ -1,6 +1,7 @@
 package gg.ironpath;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 final class IronPathDtos
@@ -72,15 +73,19 @@ final class IronPathDtos
     {
         final String capturedAt;
         final String characterName;
+        final String accountType;
+        final int combatLevel;
         final List<SkillRecord> skills;
         final List<QuestRecord> quests;
         final List<ItemRecord> items;
 
-        Snapshot(String capturedAt, String characterName, List<SkillRecord> skills,
+        Snapshot(String capturedAt, String characterName, String accountType, int combatLevel, List<SkillRecord> skills,
                  List<QuestRecord> quests, List<ItemRecord> items)
         {
             this.capturedAt = capturedAt;
             this.characterName = characterName;
+            this.accountType = accountType;
+            this.combatLevel = combatLevel;
             this.skills = skills;
             this.quests = quests;
             this.items = items;
@@ -123,13 +128,102 @@ final class IronPathDtos
         LootBatch(List<LootEvent> events) { this.events = events; }
     }
 
+    static final class KillCount
+    {
+        final int npcId;
+        String npcName;
+        int count;
+        String lastKilledAt;
+
+        KillCount(int npcId, String npcName, int count, String lastKilledAt)
+        {
+            this.npcId = npcId;
+            this.npcName = npcName;
+            this.count = count;
+            this.lastKilledAt = lastKilledAt;
+        }
+
+        void record(String name, String occurredAt)
+        {
+            count++;
+            if (name != null && !name.trim().isEmpty()) npcName = name;
+            lastKilledAt = occurredAt;
+        }
+    }
+
     static final class GoalSummary
     {
         String id;
         String kind;
         String title;
         String status;
-        boolean is_public;
+        boolean isPublic;
+        GoalSettings settings;
+    }
+
+    static final class GoalStatusUpdate
+    {
+        final String status;
+
+        GoalStatusUpdate(String status)
+        {
+            this.status = status;
+        }
+    }
+
+    static final class GoalSettings
+    {
+        String monster;
+        String targetItemName;
+        String skill;
+        String state;
+        int dropRate;
+        int startingKc;
+        int observedKc;
+        int currentLevel;
+        int targetLevel;
+        int currentXp;
+        int targetXp;
+        List<Integer> npcIds = Collections.emptyList();
+    }
+
+    static final class CollectionLogSlot
+    {
+        final int itemId;
+        final int quantity;
+        final boolean obtained;
+        final int slotOrder;
+
+        CollectionLogSlot(int itemId, int quantity, boolean obtained, int slotOrder)
+        {
+            this.itemId = itemId;
+            this.quantity = quantity;
+            this.obtained = obtained;
+            this.slotOrder = slotOrder;
+        }
+    }
+
+    static final class CollectionLogSection
+    {
+        final String key;
+        final String category;
+        final String name;
+        final int obtainedCount;
+        final int totalCount;
+        final String capturedAt;
+        final List<CollectionLogSlot> slots;
+
+        CollectionLogSection(String key, String category, String name, int obtainedCount,
+                             int totalCount, String capturedAt, List<CollectionLogSlot> slots)
+        {
+            this.key = key;
+            this.category = category;
+            this.name = name;
+            this.obtainedCount = obtainedCount;
+            this.totalCount = totalCount;
+            this.capturedAt = capturedAt;
+            this.slots = slots;
+        }
     }
 
     static final class GoalsResponse
