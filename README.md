@@ -4,6 +4,17 @@ The companion plugin synchronizes real skill XP, quest states, bank/inventory/eq
 
 The web application and API live in the separate [`iron-path`](https://github.com/ConnorFitzgerald17/iron-path) repository.
 
+## Data and privacy
+
+Iron Path does not send game data until you explicitly link the logged-in RuneScape profile with a single-use code from the website. Once linked, the plugin sends the following data to the configured **API origin** over HTTP(S):
+
+- RuneScape character name, exact account mode, combat level, total level, individual skill levels, and XP.
+- Quest states plus bank, inventory, and equipment item IDs and quantities.
+- Observed NPC kills, loot item IDs and quantities, and Collection Log item counts.
+- Iron Path goals and the live progress used to display or update them.
+
+The plugin does not read or send Jagex login details, RuneLite credentials, email credentials, or Discord credentials. The API device token and retry queues are stored in RuneLite's per-character profile storage, which prevents one linked character from synchronizing into another character's journal. Changing **API origin** changes the server that receives the data listed above.
+
 ## Development
 
 Requirement: Java 11. The repository includes a pinned Gradle 8.10.2 wrapper, so a global Gradle installation is not needed. On macOS, the wrapper automatically discovers Homebrew's `openjdk@11` installation.

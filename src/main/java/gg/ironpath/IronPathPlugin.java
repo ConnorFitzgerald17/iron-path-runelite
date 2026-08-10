@@ -57,8 +57,8 @@ import net.runelite.client.ui.NavigationButton;
 
 @PluginDescriptor(
     name = "Iron Path",
-    description = "Sync quest goals, skill grinds, collection logs, notable drops, and banked experience",
-    tags = {"ironman", "goals", "quests", "loot", "collection log", "banked xp"}
+    description = "Sync characters, skills, goals, loot, and Collection Log progress with Iron Path",
+    tags = {"ironman", "goals", "quests", "skills", "loot", "collection log", "banked xp", "tracker"}
 )
 public class IronPathPlugin extends Plugin
 {
