@@ -454,7 +454,7 @@ final class IronPathPanel extends PluginPanel
         }
         catch (Exception ignored)
         {
-            status.setText("Open iron-path-three.vercel.app in your browser");
+            status.setText("Open www.ironpathosrs.com in your browser");
         }
     }
 }
