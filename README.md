@@ -2,7 +2,7 @@
 
 The companion plugin synchronizes real skill XP, quest states, bank/inventory/equipment snapshots, Collection Log counts, observed NPC kills, and loot to the Iron Path web app. It does not read or store Jagex, RuneLite, Discord, or email credentials.
 
-The web application and API live in the separate [`iron-path`](https://github.com/ConnorFitzgerald17/iron-path) repository.
+The web application and API are live at [iron-path-three.vercel.app](https://iron-path-three.vercel.app/) and maintained in the separate [`iron-path`](https://github.com/ConnorFitzgerald17/iron-path) repository.
 
 ## Data and privacy
 

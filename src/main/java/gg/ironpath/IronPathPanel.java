@@ -447,11 +447,14 @@ final class IronPathPanel extends PluginPanel
     {
         try
         {
-            if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(new URI("https://ironpath.gg"));
+            if (Desktop.isDesktopSupported())
+            {
+                Desktop.getDesktop().browse(new URI(IronPathConfig.DEFAULT_API_ORIGIN));
+            }
         }
         catch (Exception ignored)
         {
-            status.setText("Open ironpath.gg in your browser");
+            status.setText("Open iron-path-three.vercel.app in your browser");
         }
     }
 }

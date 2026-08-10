@@ -8,6 +8,7 @@ import net.runelite.client.config.ConfigItem;
 public interface IronPathConfig extends Config
 {
     String GROUP = "ironpath";
+    String DEFAULT_API_ORIGIN = "https://iron-path-three.vercel.app";
 
     @ConfigItem(
         keyName = "apiOrigin",
@@ -17,7 +18,7 @@ public interface IronPathConfig extends Config
     )
     default String apiOrigin()
     {
-        return "https://ironpath.gg";
+        return DEFAULT_API_ORIGIN;
     }
 
     @ConfigItem(
