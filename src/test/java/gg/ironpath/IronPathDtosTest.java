@@ -4,6 +4,8 @@ import com.google.gson.Gson;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 
@@ -126,5 +128,39 @@ public class IronPathDtosTest
     {
         String json = new Gson().toJson(new IronPathDtos.GoalStatusUpdate("complete"));
         assertEquals("{\"status\":\"complete\"}", json);
+    }
+
+    @Test
+    public void parsesPotionStorageDoseLabels()
+    {
+        assertEquals(1234, IronPathPlugin.parsePotionDoses("Doses: 1,234"));
+        assertEquals(42, IronPathPlugin.parsePotionDoses("Quantity: 42"));
+        assertEquals(0, IronPathPlugin.parsePotionDoses("Doses: —"));
+        assertEquals(4, IronPathPlugin.potionDoseForName("Prayer potion(4)"));
+        assertEquals(1, IronPathPlugin.potionDoseForName("Ranarr potion (unf)"));
+    }
+
+    @Test
+    public void mergesPotionStorageIntoTheBankSnapshot()
+    {
+        Map<String, Map<Integer, Integer>> snapshots = new HashMap<>();
+        snapshots.put("bank", new HashMap<>(Collections.singletonMap(2434, 2)));
+        snapshots.put("potion-storage", new HashMap<>(Collections.singletonMap(2434, 3)));
+        snapshots.put("inventory", new HashMap<>(Collections.singletonMap(995, 100)));
+
+        List<IronPathDtos.ItemRecord> items = IronPathPlugin.snapshotItems(snapshots);
+
+        assertEquals(5, itemQuantity(items, "bank", 2434));
+        assertEquals(100, itemQuantity(items, "inventory", 995));
+        assertEquals(0, itemQuantity(items, "potion-storage", 2434));
+    }
+
+    private static int itemQuantity(List<IronPathDtos.ItemRecord> items, String container, int itemId)
+    {
+        for (IronPathDtos.ItemRecord item : items)
+        {
+            if (container.equals(item.container) && item.itemId == itemId) return item.quantity;
+        }
+        return 0;
     }
 }

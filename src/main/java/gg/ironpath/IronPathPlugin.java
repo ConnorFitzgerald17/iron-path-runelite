@@ -43,6 +43,7 @@ import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -72,6 +73,8 @@ public class IronPathPlugin extends Plugin
     private static final int LOOT_BATCH_SIZE = 100;
     private static final int SYNC_INTERVAL_MINUTES = 2;
     private static final int GOAL_REFRESH_INTERVAL_SECONDS = 15;
+    private static final String BANK_CONTAINER = "bank";
+    private static final String POTION_STORAGE_CONTAINER = "potion-storage";
 
     @Inject private Client client;
     @Inject private ClientThread clientThread;
@@ -202,6 +205,7 @@ public class IronPathPlugin extends Plugin
     @Subscribe
     public void onGameTick(GameTick event)
     {
+        if (capturePotionStorage()) debounceBankSync();
         if (collectionLog != null && collectionLog.onGameTick() && panel != null)
         {
             panel.setCollectionLogState(collectionLog.sectionCount(), pendingCollectionLogSize(), false);
@@ -259,7 +263,7 @@ public class IronPathPlugin extends Plugin
         int id = container.getId();
         if (id == InventoryID.BANK.getId())
         {
-            captureContainer("bank", container);
+            captureContainer(BANK_CONTAINER, container);
             debounceBankSync();
         }
         else if (id == InventoryID.INVENTORY.getId())
@@ -384,11 +388,7 @@ public class IronPathPlugin extends Plugin
             liveQuestStates.put(normalize(quest.getName()), state);
         }
 
-        List<IronPathDtos.ItemRecord> items = new ArrayList<>();
-        for (Map.Entry<String, Map<Integer, Integer>> entry : containerSnapshots.entrySet())
-        {
-            entry.getValue().forEach((itemId, quantity) -> items.add(new IronPathDtos.ItemRecord(itemId, quantity, entry.getKey())));
-        }
+        List<IronPathDtos.ItemRecord> items = snapshotItems(containerSnapshots);
 
         String characterName = client.getLocalPlayer().getName();
         long requestGeneration = profileGeneration;
@@ -564,7 +564,8 @@ public class IronPathPlugin extends Plugin
     {
         captureIfPresent("inventory", client.getItemContainer(InventoryID.INVENTORY));
         captureIfPresent("equipment", client.getItemContainer(InventoryID.EQUIPMENT));
-        captureIfPresent("bank", client.getItemContainer(InventoryID.BANK));
+        captureIfPresent(BANK_CONTAINER, client.getItemContainer(InventoryID.BANK));
+        capturePotionStorage();
     }
 
     private void captureIfPresent(String name, ItemContainer container)
@@ -583,6 +584,81 @@ public class IronPathPlugin extends Plugin
             }
         }
         containerSnapshots.put(name, counts);
+    }
+
+    private boolean capturePotionStorage()
+    {
+        Widget potionItems = client.getWidget(InterfaceID.Bankmain.POTIONSTORE_ITEMS);
+        if (potionItems == null || potionItems.getDynamicChildren() == null) return false;
+
+        Widget[] children = potionItems.getDynamicChildren();
+        Map<Integer, Integer> counts = new HashMap<>();
+        for (int index = 0; index + 4 < children.length; index += 5)
+        {
+            Widget itemWidget = children[index + 1];
+            Widget doseWidget = children[index + 3];
+            if (itemWidget == null || doseWidget == null || itemWidget.getItemId() < 1) continue;
+
+            int itemId = itemWidget.getItemId();
+            int totalDoses = parsePotionDoses(doseWidget.getText());
+            int withdrawDoses = potionDoseForName(client.getItemDefinition(itemId).getName());
+            int quantity = withdrawDoses == 0 ? 0 : totalDoses / withdrawDoses;
+            if (quantity > 0) counts.merge(itemId, quantity, Integer::sum);
+        }
+        Map<Integer, Integer> previous = containerSnapshots.put(POTION_STORAGE_CONTAINER, counts);
+        return !counts.equals(previous);
+    }
+
+    static int parsePotionDoses(String text)
+    {
+        if (text == null) return 0;
+        int separator = text.lastIndexOf(':');
+        String quantity = (separator >= 0 ? text.substring(separator + 1) : text).replace(",", "").trim();
+        try
+        {
+            return Math.max(0, Integer.parseInt(quantity));
+        }
+        catch (NumberFormatException ignored)
+        {
+            return 0;
+        }
+    }
+
+    static int potionDoseForName(String itemName)
+    {
+        if (itemName == null) return 0;
+        int length = itemName.length();
+        if (length >= 3 && itemName.charAt(length - 3) == '(' && itemName.charAt(length - 1) == ')')
+        {
+            char dose = itemName.charAt(length - 2);
+            if (dose >= '1' && dose <= '4') return dose - '0';
+        }
+        return 1;
+    }
+
+    static List<IronPathDtos.ItemRecord> snapshotItems(Map<String, Map<Integer, Integer>> snapshots)
+    {
+        Map<String, Map<Integer, Integer>> logicalSnapshots = new HashMap<>();
+        for (Map.Entry<String, Map<Integer, Integer>> entry : snapshots.entrySet())
+        {
+            if (POTION_STORAGE_CONTAINER.equals(entry.getKey())) continue;
+            logicalSnapshots.put(entry.getKey(), new HashMap<>(entry.getValue()));
+        }
+
+        Map<Integer, Integer> potionStorage = snapshots.get(POTION_STORAGE_CONTAINER);
+        if (potionStorage != null)
+        {
+            Map<Integer, Integer> bank = logicalSnapshots.computeIfAbsent(BANK_CONTAINER, ignored -> new HashMap<>());
+            potionStorage.forEach((itemId, quantity) -> bank.merge(itemId, quantity, Integer::sum));
+        }
+
+        List<IronPathDtos.ItemRecord> items = new ArrayList<>();
+        for (Map.Entry<String, Map<Integer, Integer>> entry : logicalSnapshots.entrySet())
+        {
+            entry.getValue().forEach((itemId, quantity) ->
+                items.add(new IronPathDtos.ItemRecord(itemId, quantity, entry.getKey())));
+        }
+        return items;
     }
 
     private void debounceBankSync()
