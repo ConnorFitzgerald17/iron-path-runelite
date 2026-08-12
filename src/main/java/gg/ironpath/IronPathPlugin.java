@@ -629,9 +629,7 @@ public class IronPathPlugin extends Plugin
             if (panel != null)
             {
                 panel.setCollectionLogState(collectionLog.sectionCount(), 0, started);
-                if (!started) panel.setConnected(true,
-                    client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName(),
-                    "Open the full Collection Log, then retry the sync");
+                if (!started) panel.setCollectionLogNeedsFullLog();
             }
             return true;
         });

@@ -43,7 +43,7 @@ final class IronPathPanel extends PluginPanel
     private final JLabel pendingValue = statValue("0");
     private final JLabel syncValue = statValue("NEVER");
     private final JLabel syncMeta = statLabel("AUTO · 2M");
-    private final JLabel collectionStatus = new JLabel("Open the overview to capture totals");
+    private final JLabel collectionStatus = new JLabel();
     private final JPanel recentCollections = verticalPanel();
     private final JPanel recentKills = verticalPanel();
     private final JPanel goals = verticalPanel();
@@ -61,6 +61,7 @@ final class IronPathPanel extends PluginPanel
     private boolean connected;
     private boolean collectionSyncing;
     private boolean collectionFailed;
+    private IronPathDtos.CollectionLogProgress collectionProgress;
     private Runnable connectAction = () -> {};
     private Runnable syncAction = () -> {};
     private Runnable collectionAction = () -> {};
@@ -106,7 +107,7 @@ final class IronPathPanel extends PluginPanel
         styleActionButton(connectButton);
         styleActionButton(syncButton);
         styleActionButton(collectionButton);
-        collectionButton.setToolTipText("The overview total is captured automatically when you open it; this button syncs every section");
+        collectionButton.setToolTipText("Step 1: open Collection Log Overview. Step 2: open the full item list. Step 3: click this button.");
         connectionSection.add(connectButton);
         add(connectionSection);
 
@@ -133,7 +134,12 @@ final class IronPathPanel extends PluginPanel
         collectionStatus.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         collectionStatus.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
         collectionStatus.setBorder(cardBorder(MOSS));
-        fullWidth(collectionStatus, 38);
+        collectionStatus.setVerticalAlignment(SwingConstants.CENTER);
+        fullWidth(collectionStatus, 62);
+        showCollectionMessage(
+            "1. Open Collection Log Overview",
+            "Totals and recent items capture automatically. Then open the full item list and click Sync full log.",
+            ColorScheme.LIGHT_GRAY_COLOR);
         collectionSection.add(collectionStatus);
         add(collectionSection);
 
@@ -208,9 +214,36 @@ final class IronPathPanel extends PluginPanel
         if (progress == null) return;
         SwingUtilities.invokeLater(() ->
         {
+            collectionProgress = progress;
             if (collectionSyncing) return;
-            collectionStatus.setText(String.format("Overview %,d / %,d captured", progress.obtainedCount, progress.totalCount));
-            collectionStatus.setForeground(MOSS);
+            showCollectionMessage(
+                String.format("Overview captured: %,d / %,d", progress.obtainedCount, progress.totalCount),
+                "2. Open the full Collection Log item list, then click Sync full log.",
+                MOSS);
+        });
+    }
+
+    void setCollectionLogNeedsFullLog()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            collectionSyncing = false;
+            collectionButton.setEnabled(connected);
+            collectionButton.setText("Sync full log");
+            if (collectionProgress == null)
+            {
+                showCollectionMessage(
+                    "Overview has not been captured",
+                    "Open Collection Log Overview and wait for confirmation. Then open the full item list and try again.",
+                    BRASS);
+            }
+            else
+            {
+                showCollectionMessage(
+                    "The full Collection Log is not open",
+                    "Your overview is saved. Open the full item list, then click Sync full log again.",
+                    BRASS);
+            }
         });
     }
 
@@ -270,23 +303,31 @@ final class IronPathPanel extends PluginPanel
                 collectionFailed = false;
                 collectionButton.setEnabled(false);
                 collectionButton.setText("Reading full log…");
-                collectionStatus.setText("Reading Collection Log progress…");
-                collectionStatus.setForeground(BRASS);
+                showCollectionMessage(
+                    "Reading the full Collection Log",
+                    "Keep the item list open while Iron Path reads every section.",
+                    BRASS);
             }
             else if (pending > 0)
             {
-                collectionStatus.setText("Collection Log · " + pending + " sections queued");
-                collectionStatus.setForeground(BRASS);
+                showCollectionMessage(
+                    pending + " Collection Log sections queued",
+                    "Iron Path will upload the saved sections automatically.",
+                    BRASS);
             }
-            else if (sections > 0)
+            else if (collectionProgress != null)
             {
-                collectionStatus.setText("Full log ready · click sync above");
-                collectionStatus.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+                showCollectionMessage(
+                    String.format("Overview captured: %,d / %,d", collectionProgress.obtainedCount, collectionProgress.totalCount),
+                    "Open the full Collection Log item list, then click Sync full log.",
+                    MOSS);
             }
             else
             {
-                collectionStatus.setText("Open the overview to capture totals");
-                collectionStatus.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+                showCollectionMessage(
+                    "1. Open Collection Log Overview",
+                    "Totals and recent items capture automatically. Then open the full item list and click Sync full log.",
+                    ColorScheme.LIGHT_GRAY_COLOR);
             }
         });
     }
@@ -299,8 +340,10 @@ final class IronPathPanel extends PluginPanel
             collectionFailed = false;
             collectionButton.setEnabled(false);
             collectionButton.setText("Uploading full log…");
-            collectionStatus.setText("Uploading " + sections + " Collection Log sections…");
-            collectionStatus.setForeground(BRASS);
+            showCollectionMessage(
+                "Uploading " + sections + " Collection Log sections",
+                "You may close the in-game Collection Log now.",
+                BRASS);
         });
     }
 
@@ -312,8 +355,10 @@ final class IronPathPanel extends PluginPanel
             collectionFailed = true;
             collectionButton.setEnabled(connected);
             collectionButton.setText("Retry full log");
-            collectionStatus.setText("Upload failed · " + sections + " sections queued");
-            collectionStatus.setForeground(RUST);
+            showCollectionMessage(
+                "Collection Log upload failed",
+                sections + " sections are safely queued. Click Retry full log to send them again.",
+                RUST);
         });
     }
 
@@ -325,9 +370,19 @@ final class IronPathPanel extends PluginPanel
             collectionFailed = false;
             collectionButton.setEnabled(connected);
             collectionButton.setText("Sync full log");
-            collectionStatus.setText("Collection Log · " + sections + " sections synced");
-            collectionStatus.setForeground(MOSS);
+            String totals = collectionProgress == null ? "" : String.format(
+                " Overview total: %,d / %,d.", collectionProgress.obtainedCount, collectionProgress.totalCount);
+            showCollectionMessage(
+                "Collection Log sync complete",
+                sections + " sections uploaded." + totals,
+                MOSS);
         });
+    }
+
+    private void showCollectionMessage(String headline, String detail, Color color)
+    {
+        collectionStatus.setText("<html><b>" + headline + "</b><br>" + detail + "</html>");
+        collectionStatus.setForeground(color);
     }
 
     void setGoals(List<IronPathGoalProgress> progress)

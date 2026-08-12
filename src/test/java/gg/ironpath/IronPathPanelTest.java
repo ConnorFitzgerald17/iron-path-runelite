@@ -57,6 +57,25 @@ public class IronPathPanelTest
         assertFalse(goals.getParent().isVisible());
     }
 
+    @Test
+    public void explainsOverviewCaptureAndFullLogSync() throws Exception
+    {
+        AtomicReference<IronPathPanel> reference = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> reference.set(new IronPathPanel()));
+
+        assertNotNull(findLabelContaining(reference.get(), "Totals and recent items capture automatically"));
+
+        reference.get().setCollectionOverviewProgress(new IronPathDtos.CollectionLogProgress(460, 1712));
+        SwingUtilities.invokeAndWait(() -> {});
+        assertNotNull(findLabelContaining(reference.get(), "Overview captured: 460 / 1,712"));
+        assertNotNull(findLabelContaining(reference.get(), "Open the full Collection Log item list"));
+
+        reference.get().setCollectionLogNeedsFullLog();
+        SwingUtilities.invokeAndWait(() -> {});
+        assertNotNull(findLabelContaining(reference.get(), "The full Collection Log is not open"));
+        assertNotNull(findLabelContaining(reference.get(), "Your overview is saved"));
+    }
+
     private static void layoutTree(Container container)
     {
         container.doLayout();
@@ -88,6 +107,20 @@ public class IronPathPanelTest
             if (component instanceof Container)
             {
                 JLabel found = findLabel((Container) component, text);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static JLabel findLabelContaining(Container container, String text)
+    {
+        for (Component component : container.getComponents())
+        {
+            if (component instanceof JLabel && ((JLabel) component).getText().contains(text)) return (JLabel) component;
+            if (component instanceof Container)
+            {
+                JLabel found = findLabelContaining((Container) component, text);
                 if (found != null) return found;
             }
         }
