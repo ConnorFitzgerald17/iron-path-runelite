@@ -128,6 +128,7 @@ public class IronPathPlugin extends Plugin
     private volatile long profileGeneration;
     private volatile boolean running;
     private int observedKills;
+    private int recentCollectionCaptureTicks;
     private IronPathCollectionLog collectionLog;
 
     @Provides
@@ -195,6 +196,7 @@ public class IronPathPlugin extends Plugin
         liveQuestStates.clear();
         pendingCollectionLog.clear();
         pendingCollectionRecent.clear();
+        recentCollectionCaptureTicks = 0;
         if (collectionLog != null) collectionLog.reset();
         currentGoals = Collections.emptyList();
     }
@@ -214,7 +216,10 @@ public class IronPathPlugin extends Plugin
         if (collectionLog == null) return;
         if (event.getGroupId() == InterfaceID.COLLECTION_OVERVIEW)
         {
-            clientThread.invokeLater(this::refreshRecentCollectionPanel);
+            // The widget group is announced before its dynamic item children
+            // have always been populated. Retry briefly on game ticks instead
+            // of caching an empty recent-items list immediately.
+            recentCollectionCaptureTicks = 5;
             return;
         }
         if (event.getGroupId() != InterfaceID.COLLECTION) return;
@@ -252,6 +257,11 @@ public class IronPathPlugin extends Plugin
     public void onGameTick(GameTick event)
     {
         if (capturePotionStorage()) debounceBankSync();
+        if (recentCollectionCaptureTicks > 0)
+        {
+            if (refreshRecentCollectionPanel()) recentCollectionCaptureTicks = 0;
+            else recentCollectionCaptureTicks--;
+        }
         if (collectionLog != null && collectionLog.onGameTick() && panel != null)
         {
             panel.setCollectionLogState(collectionLog.sectionCount(), pendingCollectionLogSize(), false);
@@ -287,6 +297,7 @@ public class IronPathPlugin extends Plugin
         liveSkillXps.clear();
         liveQuestStates.clear();
         if (collectionLog != null) collectionLog.reset();
+        recentCollectionCaptureTicks = 0;
         currentGoals = Collections.emptyList();
         observedKills = 0;
         refreshConnectionState();
@@ -669,17 +680,19 @@ public class IronPathPlugin extends Plugin
         });
     }
 
-    private void refreshRecentCollectionPanel()
+    private boolean refreshRecentCollectionPanel()
     {
-        if (collectionLog == null || panel == null) return;
+        if (collectionLog == null || panel == null) return false;
         List<String> names = new ArrayList<>();
-        for (int itemId : collectionLog.recentItemIds())
+        List<Integer> recentItemIds = collectionLog.recentItemIds();
+        for (int itemId : recentItemIds)
         {
             String name = client.getItemDefinition(itemId).getName();
             if (name != null && !name.trim().isEmpty()) names.add(name);
             if (names.size() == 3) break;
         }
         panel.setRecentCollections(names);
+        return !recentItemIds.isEmpty();
     }
 
     private void captureCollectionHeaderKillCount()
@@ -1071,7 +1084,11 @@ public class IronPathPlugin extends Plugin
         currentPanel.setKillActivity(observedKills, pendingLootSize(), recent);
         currentPanel.setSyncState(lastSuccessfulSync, snapshotUploadInFlight.get(), pendingLootSize(), config.autoSync());
         currentPanel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog != null && collectionLog.isAwaitingSearch());
-        clientThread.invokeLater(this::refreshRecentCollectionPanel);
+        clientThread.invokeLater(() ->
+        {
+            refreshRecentCollectionPanel();
+            return true;
+        });
         updateGoalProgress();
     }
 

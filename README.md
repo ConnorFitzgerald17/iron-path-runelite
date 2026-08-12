@@ -34,7 +34,7 @@ For local web development, set **API origin** to `http://localhost:3000`. Genera
 - RSN, exact account mode, combat/total levels, skills, quests, inventory, and equipment: login, manual sync, and every two minutes.
 - Dashboard goals: startup, login, manual sync, and every 15 seconds while automatic sync is enabled.
 - Bank: two seconds after the last bank container change.
-- Collection Log: open the log and use its native **Search** button once. The plugin captures the authoritative full-log result, queues the newest copy of every section, and retries failed uploads against the active RuneScape profile.
+- Collection Log: open the Collection Log overview once so RuneLite can expose its latest items, then open the full log and use Iron Path's **Sync Collection Log** button. The plugin captures the authoritative full-log result, keeps the last successfully read recent-items list when the overview is unavailable, queues the newest copy of every section, and retries failed uploads against the active RuneScape profile.
 - NPC kills and loot: recorded from RuneLite loot events, delivered immediately in batches, and retried without duplicate dashboard records.
 - Kill totals: retained per NPC after upload so recent activity and grind progress survive client restarts.
 - Offline queue: capped at 500 events and flushed in batches of 100 to keep requests small.
