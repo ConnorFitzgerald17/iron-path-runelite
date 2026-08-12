@@ -154,11 +154,14 @@ public class IronPathDtosTest
             "bosses-abyssal-sire", "Bosses", "Abyssal Sire", 1, 1, "2026-08-10T18:00:00Z",
             Collections.singletonList(new IronPathDtos.CollectionLogSlot(13262, 1, true, 0)));
         IronPathDtos.CollectionLogSync sync = new IronPathDtos.CollectionLogSync(
-            "2026-08-10T18:00:00Z", Collections.singletonList(section), Collections.singletonList(13262));
+            "2026-08-10T18:00:00Z", Collections.singletonList(section), Collections.singletonList(13262),
+            460, 1712);
 
         String json = new Gson().toJson(sync);
 
         assertEquals(true, json.contains("\"recentItemIds\":[13262]"));
+        assertEquals(true, json.contains("\"globalObtainedCount\":460"));
+        assertEquals(true, json.contains("\"globalTotalCount\":1712"));
         assertEquals(true, json.contains("\"sections\":["));
     }
 

@@ -247,12 +247,29 @@ final class IronPathDtos
         final String capturedAt;
         final List<CollectionLogSection> sections;
         final List<Integer> recentItemIds;
+        final Integer globalObtainedCount;
+        final Integer globalTotalCount;
 
-        CollectionLogSync(String capturedAt, List<CollectionLogSection> sections, List<Integer> recentItemIds)
+        CollectionLogSync(String capturedAt, List<CollectionLogSection> sections, List<Integer> recentItemIds,
+                          Integer globalObtainedCount, Integer globalTotalCount)
         {
             this.capturedAt = capturedAt;
             this.sections = sections;
             this.recentItemIds = recentItemIds;
+            this.globalObtainedCount = globalObtainedCount;
+            this.globalTotalCount = globalTotalCount;
+        }
+    }
+
+    static final class CollectionLogProgress
+    {
+        final int obtainedCount;
+        final int totalCount;
+
+        CollectionLogProgress(int obtainedCount, int totalCount)
+        {
+            this.obtainedCount = obtainedCount;
+            this.totalCount = totalCount;
         }
     }
 

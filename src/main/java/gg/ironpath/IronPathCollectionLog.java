@@ -9,6 +9,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.runelite.api.Client;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.MenuAction;
@@ -28,12 +30,15 @@ final class IronPathCollectionLog
     private static final int PAGE_ITEM_ENUM_PARAM = 690;
     private static final int SETTLE_TICKS = 3;
     private static final String[] CATEGORIES = {"Bosses", "Raids", "Clues", "Minigames", "Other"};
+    private static final Pattern PROGRESS_FRACTION = Pattern.compile("([0-9][0-9,]*)\\s*/\\s*([0-9][0-9,]*)");
+    private static final Pattern NUMBER = Pattern.compile("[0-9][0-9,]*");
 
     private final Client client;
     private final Consumer<List<IronPathDtos.CollectionLogSection>> listener;
     private final List<PageDefinition> definitions = new ArrayList<>();
     private final Map<Integer, Integer> harvest = new HashMap<>();
     private final List<Integer> latestItems = new ArrayList<>();
+    private IronPathDtos.CollectionLogProgress latestProgress;
     private boolean awaitingSearch;
     private boolean receiving;
     private int lastTransmitTick = -1;
@@ -81,6 +86,25 @@ final class IronPathCollectionLog
         return new ArrayList<>(latestItems);
     }
 
+    IronPathDtos.CollectionLogProgress overviewProgress()
+    {
+        loadDefinitions();
+        int definitionTotal = uniqueDefinitionItemCount();
+        Widget root = client.getWidget(InterfaceID.CollectionOverview.UNIVERSE);
+        IronPathDtos.CollectionLogProgress progress = findProgress(root, definitionTotal, null);
+        if (progress == null)
+        {
+            Integer obtained = widgetNumber(client.getWidget(InterfaceID.CollectionOverview.PROGRESS_LEFT_TEXT));
+            Integer total = widgetNumber(client.getWidget(InterfaceID.CollectionOverview.PROGRESS_RIGHT_TEXT));
+            if (validProgress(obtained, total, definitionTotal))
+            {
+                progress = new IronPathDtos.CollectionLogProgress(obtained, total);
+            }
+        }
+        if (progress != null) latestProgress = progress;
+        return latestProgress;
+    }
+
     boolean onScriptPreFired(int scriptId, ScriptEvent event)
     {
         if (scriptId != COLLECTION_DELAYED_TRANSMIT || !awaitingSearch || isAnotherPlayersLog()) return false;
@@ -121,6 +145,7 @@ final class IronPathCollectionLog
         definitions.clear();
         harvest.clear();
         latestItems.clear();
+        latestProgress = null;
         awaitingSearch = false;
         receiving = false;
         lastTransmitTick = -1;
@@ -198,6 +223,72 @@ final class IronPathCollectionLog
         {
             if (widget != null) collectItems(widget, itemIds);
         }
+    }
+
+    private int uniqueDefinitionItemCount()
+    {
+        Set<Integer> ids = new LinkedHashSet<>();
+        for (PageDefinition definition : definitions)
+        {
+            for (int itemId : definition.itemIds) if (itemId > 0) ids.add(itemId);
+        }
+        return ids.size();
+    }
+
+    private static IronPathDtos.CollectionLogProgress findProgress(
+        Widget widget, int definitionTotal, IronPathDtos.CollectionLogProgress best)
+    {
+        if (widget == null) return best;
+        String text = Text.removeTags(widget.getText() == null ? "" : widget.getText());
+        Matcher matcher = PROGRESS_FRACTION.matcher(text);
+        while (matcher.find())
+        {
+            Integer obtained = parseNumber(matcher.group(1));
+            Integer total = parseNumber(matcher.group(2));
+            if (validProgress(obtained, total, definitionTotal)
+                && (best == null || total > best.totalCount))
+            {
+                best = new IronPathDtos.CollectionLogProgress(obtained, total);
+            }
+        }
+        best = findProgress(widget.getDynamicChildren(), definitionTotal, best);
+        best = findProgress(widget.getStaticChildren(), definitionTotal, best);
+        return findProgress(widget.getNestedChildren(), definitionTotal, best);
+    }
+
+    private static IronPathDtos.CollectionLogProgress findProgress(
+        Widget[] widgets, int definitionTotal, IronPathDtos.CollectionLogProgress best)
+    {
+        if (widgets == null) return best;
+        for (Widget widget : widgets) best = findProgress(widget, definitionTotal, best);
+        return best;
+    }
+
+    private static Integer widgetNumber(Widget widget)
+    {
+        if (widget == null || widget.getText() == null) return null;
+        Matcher matcher = NUMBER.matcher(Text.removeTags(widget.getText()));
+        return matcher.find() ? parseNumber(matcher.group()) : null;
+    }
+
+    private static Integer parseNumber(String value)
+    {
+        try
+        {
+            return Integer.parseInt(value.replace(",", ""));
+        }
+        catch (NumberFormatException ignored)
+        {
+            return null;
+        }
+    }
+
+    private static boolean validProgress(Integer obtained, Integer total, int definitionTotal)
+    {
+        if (obtained == null || total == null || obtained < 0 || total <= 0 || obtained > total) return false;
+        if (definitionTotal <= 0) return true;
+        int tolerance = Math.max(32, definitionTotal / 20);
+        return Math.abs(total - definitionTotal) <= tolerance;
     }
 
     private static String key(String category, String name)

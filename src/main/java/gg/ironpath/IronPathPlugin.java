@@ -649,7 +649,10 @@ public class IronPathPlugin extends Plugin
             sections.sort(Comparator.comparing(section -> section.key));
             String capturedAt = sections.stream().map(section -> section.capturedAt).max(String::compareTo)
                 .orElse(Instant.now().toString());
-            sync = new IronPathDtos.CollectionLogSync(capturedAt, sections, new ArrayList<>(pendingCollectionRecent));
+            IronPathDtos.CollectionLogProgress progress = collectionLog == null ? null : collectionLog.overviewProgress();
+            sync = new IronPathDtos.CollectionLogSync(capturedAt, sections, new ArrayList<>(pendingCollectionRecent),
+                progress == null ? null : progress.obtainedCount,
+                progress == null ? null : progress.totalCount);
             collectionUploadInFlight = true;
         }
         if (panel != null) panel.setCollectionLogUploading(sync.sections.size());
@@ -683,6 +686,7 @@ public class IronPathPlugin extends Plugin
     private boolean refreshRecentCollectionPanel()
     {
         if (collectionLog == null || panel == null) return false;
+        collectionLog.overviewProgress();
         List<String> names = new ArrayList<>();
         List<Integer> recentItemIds = collectionLog.recentItemIds();
         for (int itemId : recentItemIds)
