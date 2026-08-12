@@ -2,6 +2,7 @@ package gg.ironpath;
 
 import java.awt.Component;
 import java.awt.Container;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -58,22 +59,28 @@ public class IronPathPanelTest
     }
 
     @Test
-    public void explainsOverviewCaptureAndFullLogSync() throws Exception
+    public void explainsFullLogDetectionAndSync() throws Exception
     {
         AtomicReference<IronPathPanel> reference = new AtomicReference<>();
         SwingUtilities.invokeAndWait(() -> reference.set(new IronPathPanel()));
 
-        assertNotNull(findLabelContaining(reference.get(), "Totals and recent items capture automatically"));
+        assertNotNull(findLabelContaining(reference.get(), "Iron Path reads the total from its title"));
 
-        reference.get().setCollectionOverviewProgress(new IronPathDtos.CollectionLogProgress(460, 1712));
+        reference.get().setCollectionProgress(new IronPathDtos.CollectionLogProgress(460, 1712));
         SwingUtilities.invokeAndWait(() -> {});
-        assertNotNull(findLabelContaining(reference.get(), "Overview captured: 460 / 1,712"));
-        assertNotNull(findLabelContaining(reference.get(), "Open the full Collection Log item list"));
+        assertNotNull(findLabelContaining(reference.get(), "Collection Log detected: 460 / 1,712"));
+        assertNotNull(findLabelContaining(reference.get(), "Keep the full item list open"));
 
         reference.get().setCollectionLogNeedsFullLog();
         SwingUtilities.invokeAndWait(() -> {});
-        assertNotNull(findLabelContaining(reference.get(), "The full Collection Log is not open"));
-        assertNotNull(findLabelContaining(reference.get(), "Your overview is saved"));
+        assertNotNull(findLabelContaining(reference.get(), "Could not read the full Collection Log"));
+        assertNotNull(findLabelContaining(reference.get(), "not the character summary"));
+
+        reference.get().setCollectionLastSynced(Instant.parse("2026-08-12T20:24:00Z"));
+        SwingUtilities.invokeAndWait(() -> {});
+        JLabel lastSync = findLabelContaining(reference.get(), "Last full sync:");
+        assertNotNull(lastSync);
+        assertFalse(lastSync.getText().contains("Never"));
     }
 
     private static void layoutTree(Container container)

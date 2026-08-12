@@ -100,7 +100,7 @@ public interface IronPathConfig extends Config
     @ConfigItem(
         keyName = "showCollectionLog",
         name = "Show Collection Log",
-        description = "Show Collection Log overview status and its sync control",
+        description = "Show Collection Log detection, last-sync status, and its sync control",
         position = 2,
         section = sidebarSection
     )

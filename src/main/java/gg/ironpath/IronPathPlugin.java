@@ -79,12 +79,14 @@ public class IronPathPlugin extends Plugin
     private static final String KILL_COUNTS_KEY = "killCounts";
     private static final String ABSOLUTE_KILL_COUNTS_KEY = "absoluteKillCounts";
     private static final String LAST_SYNC_KEY = "lastSuccessfulSync";
+    private static final String LAST_COLLECTION_SYNC_KEY = "lastCollectionLogSync";
     private static final String COLLECTION_QUEUE_KEY = "pendingCollectionLog";
     private static final String COLLECTION_RECENT_KEY = "pendingCollectionRecent";
     private static final int MAX_PENDING_LOOT = 500;
     private static final int LOOT_BATCH_SIZE = 100;
     private static final int SYNC_INTERVAL_MINUTES = 2;
     private static final int GOAL_REFRESH_INTERVAL_SECONDS = 15;
+    private static final int COLLECTION_SYNC_RETRY_TICKS = 8;
     private static final String BANK_CONTAINER = "bank";
     private static final String POTION_STORAGE_CONTAINER = "potion-storage";
     private static final Pattern COMPLETION_COUNT = Pattern.compile(
@@ -125,10 +127,13 @@ public class IronPathPlugin extends Plugin
     private volatile boolean collectionUploadInFlight;
     private volatile List<IronPathDtos.GoalSummary> currentGoals = Collections.emptyList();
     private volatile Instant lastSuccessfulSync;
+    private volatile Instant lastCollectionLogSync;
     private volatile long profileGeneration;
     private volatile boolean running;
     private int observedKills;
     private int recentCollectionCaptureTicks;
+    private int collectionProgressCaptureTicks;
+    private int collectionSyncRequestTicks;
     private IronPathCollectionLog collectionLog;
 
     @Provides
@@ -185,6 +190,7 @@ public class IronPathPlugin extends Plugin
         saveKillCounts();
         saveAbsoluteKillCounts();
         savePendingCollectionLog();
+        saveLastCollectionLogSync();
         if (navigationButton != null) clientToolbar.removeNavigation(navigationButton);
         panel = null;
         navigationButton = null;
@@ -197,6 +203,8 @@ public class IronPathPlugin extends Plugin
         pendingCollectionLog.clear();
         pendingCollectionRecent.clear();
         recentCollectionCaptureTicks = 0;
+        collectionProgressCaptureTicks = 0;
+        collectionSyncRequestTicks = 0;
         if (collectionLog != null) collectionLog.reset();
         currentGoals = Collections.emptyList();
     }
@@ -223,10 +231,15 @@ public class IronPathPlugin extends Plugin
             return;
         }
         if (event.getGroupId() != InterfaceID.COLLECTION) return;
+        collectionProgressCaptureTicks = 5;
         clientThread.invokeLater(() ->
         {
             collectionLog.collectionOpened();
-            if (panel != null) panel.setCollectionLogState(collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog.isAwaitingSearch());
+            if (panel != null)
+            {
+                panel.setCollectionProgress(collectionLog.globalProgress());
+                panel.setCollectionLogState(collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog.isAwaitingSearch());
+            }
             return true;
         });
     }
@@ -257,6 +270,12 @@ public class IronPathPlugin extends Plugin
     public void onGameTick(GameTick event)
     {
         if (capturePotionStorage()) debounceBankSync();
+        if (collectionSyncRequestTicks > 0) attemptCollectionLogSync();
+        if (collectionProgressCaptureTicks > 0)
+        {
+            if (collectionLog != null && panel != null) panel.setCollectionProgress(collectionLog.globalProgress());
+            collectionProgressCaptureTicks--;
+        }
         if (recentCollectionCaptureTicks > 0)
         {
             if (refreshRecentCollectionPanel()) recentCollectionCaptureTicks = 0;
@@ -298,6 +317,8 @@ public class IronPathPlugin extends Plugin
         liveQuestStates.clear();
         if (collectionLog != null) collectionLog.reset();
         recentCollectionCaptureTicks = 0;
+        collectionProgressCaptureTicks = 0;
+        collectionSyncRequestTicks = 0;
         currentGoals = Collections.emptyList();
         observedKills = 0;
         refreshConnectionState();
@@ -625,14 +646,25 @@ public class IronPathPlugin extends Plugin
         }
         clientThread.invokeLater(() ->
         {
-            boolean started = collectionLog.requestSync();
-            if (panel != null)
-            {
-                panel.setCollectionLogState(collectionLog.sectionCount(), 0, started);
-                if (!started) panel.setCollectionLogNeedsFullLog();
-            }
+            collectionSyncRequestTicks = COLLECTION_SYNC_RETRY_TICKS;
+            if (panel != null) panel.setCollectionLogWaiting();
+            attemptCollectionLogSync();
             return true;
         });
+    }
+
+    private void attemptCollectionLogSync()
+    {
+        if (collectionSyncRequestTicks <= 0 || collectionLog == null) return;
+        boolean started = collectionLog.requestSync();
+        if (started)
+        {
+            collectionSyncRequestTicks = 0;
+            if (panel != null) panel.setCollectionLogState(collectionLog.sectionCount(), 0, true);
+            return;
+        }
+        collectionSyncRequestTicks--;
+        if (collectionSyncRequestTicks == 0 && panel != null) panel.setCollectionLogNeedsFullLog();
     }
 
     private void flushPendingCollectionLog()
@@ -647,7 +679,7 @@ public class IronPathPlugin extends Plugin
             sections.sort(Comparator.comparing(section -> section.key));
             String capturedAt = sections.stream().map(section -> section.capturedAt).max(String::compareTo)
                 .orElse(Instant.now().toString());
-            IronPathDtos.CollectionLogProgress progress = collectionLog == null ? null : collectionLog.overviewProgress();
+            IronPathDtos.CollectionLogProgress progress = collectionLog == null ? null : collectionLog.globalProgress();
             sync = new IronPathDtos.CollectionLogSync(capturedAt, sections, new ArrayList<>(pendingCollectionRecent),
                 progress == null ? null : progress.obtainedCount,
                 progress == null ? null : progress.totalCount);
@@ -672,9 +704,19 @@ public class IronPathPlugin extends Plugin
                 }
                 collectionUploadInFlight = false;
             }
+            boolean complete = success && pendingCollectionLogSize() == 0;
+            if (complete)
+            {
+                lastCollectionLogSync = Instant.now();
+                saveLastCollectionLogSync();
+            }
             if (panel != null)
             {
-                if (success && pendingCollectionLogSize() == 0) panel.setCollectionLogSynced(sync.sections.size());
+                if (complete)
+                {
+                    panel.setCollectionLastSynced(lastCollectionLogSync);
+                    panel.setCollectionLogSynced(sync.sections.size());
+                }
                 else if (!success) panel.setCollectionLogFailed(pendingCollectionLogSize());
                 else panel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), false);
             }
@@ -684,8 +726,8 @@ public class IronPathPlugin extends Plugin
     private boolean refreshRecentCollectionPanel()
     {
         if (collectionLog == null || panel == null) return false;
-        IronPathDtos.CollectionLogProgress progress = collectionLog.overviewProgress();
-        panel.setCollectionOverviewProgress(progress);
+        IronPathDtos.CollectionLogProgress progress = collectionLog.globalProgress();
+        panel.setCollectionProgress(progress);
         List<String> names = new ArrayList<>();
         List<Integer> recentItemIds = collectionLog.recentItemIds();
         for (int itemId : recentItemIds)
@@ -936,6 +978,7 @@ public class IronPathPlugin extends Plugin
         loadKillCounts();
         loadAbsoluteKillCounts();
         String storedSync = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, LAST_SYNC_KEY);
+        String storedCollectionSync = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, LAST_COLLECTION_SYNC_KEY);
         try
         {
             lastSuccessfulSync = storedSync == null ? null : Instant.parse(storedSync);
@@ -943,6 +986,14 @@ public class IronPathPlugin extends Plugin
         catch (RuntimeException ignored)
         {
             lastSuccessfulSync = null;
+        }
+        try
+        {
+            lastCollectionLogSync = storedCollectionSync == null ? null : Instant.parse(storedCollectionSync);
+        }
+        catch (RuntimeException ignored)
+        {
+            lastCollectionLogSync = null;
         }
     }
 
@@ -1073,6 +1124,15 @@ public class IronPathPlugin extends Plugin
         }
     }
 
+    private void saveLastCollectionLogSync()
+    {
+        if (configManager.getRSProfileKey() != null && lastCollectionLogSync != null)
+        {
+            configManager.setRSProfileConfiguration(IronPathConfig.GROUP, LAST_COLLECTION_SYNC_KEY,
+                lastCollectionLogSync.toString());
+        }
+    }
+
     private void updatePanelData()
     {
         IronPathPanel currentPanel = panel;
@@ -1086,6 +1146,7 @@ public class IronPathPlugin extends Plugin
             kill.lastKilledAt == null ? "" : kill.lastKilledAt).reversed());
         currentPanel.setKillActivity(observedKills, pendingLootSize(), recent);
         currentPanel.setSyncState(lastSuccessfulSync, snapshotUploadInFlight.get(), pendingLootSize(), config.autoSync());
+        currentPanel.setCollectionLastSynced(lastCollectionLogSync);
         currentPanel.setDisplayPreferences(
             config.showConnection(),
             config.showSyncActivity(),

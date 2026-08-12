@@ -36,6 +36,7 @@ final class IronPathPanel extends PluginPanel
     private static final Color RUST = new Color(183, 90, 77);
     private static final Color BORDER = new Color(61, 67, 59);
     private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm");
+    private static final DateTimeFormatter COLLECTION_SYNC_TIME = DateTimeFormatter.ofPattern("MMM d · HH:mm");
 
     private final JLabel status = new JLabel("Not linked");
     private final JLabel character = new JLabel("No character");
@@ -44,6 +45,7 @@ final class IronPathPanel extends PluginPanel
     private final JLabel syncValue = statValue("NEVER");
     private final JLabel syncMeta = statLabel("AUTO · 2M");
     private final JLabel collectionStatus = new JLabel();
+    private final JLabel collectionLastSync = new JLabel("Last full sync: Never");
     private final JPanel recentCollections = verticalPanel();
     private final JPanel recentKills = verticalPanel();
     private final JPanel goals = verticalPanel();
@@ -107,7 +109,7 @@ final class IronPathPanel extends PluginPanel
         styleActionButton(connectButton);
         styleActionButton(syncButton);
         styleActionButton(collectionButton);
-        collectionButton.setToolTipText("Step 1: open Collection Log Overview. Step 2: open the full item list. Step 3: click this button.");
+        collectionButton.setToolTipText("Open the full Collection Log item list, keep it open, then click this button.");
         connectionSection.add(connectButton);
         add(connectionSection);
 
@@ -137,10 +139,15 @@ final class IronPathPanel extends PluginPanel
         collectionStatus.setVerticalAlignment(SwingConstants.CENTER);
         fullWidth(collectionStatus, 62);
         showCollectionMessage(
-            "1. Open Collection Log Overview",
-            "Totals and recent items capture automatically. Then open the full item list and click Sync full log.",
+            "Open the full Collection Log",
+            "Iron Path reads the total from its title. Keep the item list open, then click Sync full log.",
             ColorScheme.LIGHT_GRAY_COLOR);
         collectionSection.add(collectionStatus);
+        collectionLastSync.setForeground(new Color(145, 150, 145));
+        collectionLastSync.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 9));
+        collectionLastSync.setBorder(BorderFactory.createEmptyBorder(4, 2, 0, 0));
+        fullWidth(collectionLastSync, 20);
+        collectionSection.add(collectionLastSync);
         add(collectionSection);
 
         recentCollectionsSection.add(gap(14));
@@ -209,7 +216,7 @@ final class IronPathPanel extends PluginPanel
         });
     }
 
-    void setCollectionOverviewProgress(IronPathDtos.CollectionLogProgress progress)
+    void setCollectionProgress(IronPathDtos.CollectionLogProgress progress)
     {
         if (progress == null) return;
         SwingUtilities.invokeLater(() ->
@@ -217,10 +224,25 @@ final class IronPathPanel extends PluginPanel
             collectionProgress = progress;
             if (collectionSyncing) return;
             showCollectionMessage(
-                String.format("Overview captured: %,d / %,d", progress.obtainedCount, progress.totalCount),
-                "2. Open the full Collection Log item list, then click Sync full log.",
+                String.format("Collection Log detected: %,d / %,d", progress.obtainedCount, progress.totalCount),
+                "Keep the full item list open, then click Sync full log.",
                 MOSS);
         });
+    }
+
+    void setCollectionLastSynced(Instant syncedAt)
+    {
+        SwingUtilities.invokeLater(() -> collectionLastSync.setText(syncedAt == null
+            ? "Last full sync: Never"
+            : "Last full sync: " + COLLECTION_SYNC_TIME.format(syncedAt.atZone(ZoneId.systemDefault()))));
+    }
+
+    void setCollectionLogWaiting()
+    {
+        SwingUtilities.invokeLater(() -> showCollectionMessage(
+            "Waiting for the full Collection Log",
+            "Keep the item list open. Iron Path will retry for a few seconds while the interface loads.",
+            BRASS));
     }
 
     void setCollectionLogNeedsFullLog()
@@ -230,20 +252,10 @@ final class IronPathPanel extends PluginPanel
             collectionSyncing = false;
             collectionButton.setEnabled(connected);
             collectionButton.setText("Sync full log");
-            if (collectionProgress == null)
-            {
-                showCollectionMessage(
-                    "Overview has not been captured",
-                    "Open Collection Log Overview and wait for confirmation. Then open the full item list and try again.",
-                    BRASS);
-            }
-            else
-            {
-                showCollectionMessage(
-                    "The full Collection Log is not open",
-                    "Your overview is saved. Open the full item list, then click Sync full log again.",
-                    BRASS);
-            }
+            showCollectionMessage(
+                "Could not read the full Collection Log",
+                "Open the full item list—not the character summary—and leave it open before trying again.",
+                BRASS);
         });
     }
 
@@ -318,15 +330,15 @@ final class IronPathPanel extends PluginPanel
             else if (collectionProgress != null)
             {
                 showCollectionMessage(
-                    String.format("Overview captured: %,d / %,d", collectionProgress.obtainedCount, collectionProgress.totalCount),
-                    "Open the full Collection Log item list, then click Sync full log.",
+                    String.format("Collection Log detected: %,d / %,d", collectionProgress.obtainedCount, collectionProgress.totalCount),
+                    "Keep the full item list open, then click Sync full log.",
                     MOSS);
             }
             else
             {
                 showCollectionMessage(
-                    "1. Open Collection Log Overview",
-                    "Totals and recent items capture automatically. Then open the full item list and click Sync full log.",
+                    "Open the full Collection Log",
+                    "Iron Path reads the total from its title. Keep the item list open, then click Sync full log.",
                     ColorScheme.LIGHT_GRAY_COLOR);
             }
         });
