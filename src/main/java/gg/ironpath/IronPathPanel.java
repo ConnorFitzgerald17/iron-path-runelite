@@ -20,6 +20,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
@@ -42,7 +43,7 @@ final class IronPathPanel extends PluginPanel
     private final JLabel pendingValue = statValue("0");
     private final JLabel syncValue = statValue("NEVER");
     private final JLabel syncMeta = statLabel("AUTO · 2M");
-    private final JLabel collectionStatus = new JLabel("Open Collection Log, then click Sync Log");
+    private final JLabel collectionStatus = new JLabel("Open the overview to capture totals");
     private final JPanel recentCollections = verticalPanel();
     private final JPanel recentKills = verticalPanel();
     private final JPanel goals = verticalPanel();
@@ -50,7 +51,13 @@ final class IronPathPanel extends PluginPanel
     private final JButton completedToggle = new JButton("COMPLETED (0)  ▸");
     private final JButton connectButton = new JButton("Connect");
     private final JButton syncButton = new JButton("Sync now");
-    private final JButton collectionButton = new JButton("Sync Collection Log");
+    private final JButton collectionButton = new JButton("Sync full log");
+    private final JPanel connectionSection = verticalPanel();
+    private final JPanel syncSection = verticalPanel();
+    private final JPanel collectionSection = verticalPanel();
+    private final JPanel recentCollectionsSection = verticalPanel();
+    private final JPanel recentKillsSection = verticalPanel();
+    private final JPanel goalsSection = verticalPanel();
     private boolean connected;
     private boolean collectionSyncing;
     private boolean collectionFailed;
@@ -78,74 +85,76 @@ final class IronPathPanel extends PluginPanel
         subtitle.setFont(subtitle.getFont().deriveFont(9f));
         subtitle.setAlignmentX(LEFT_ALIGNMENT);
         add(subtitle);
-        add(gap(12));
+        connectionSection.add(gap(12));
 
         JPanel connection = new JPanel(new BorderLayout(8, 3));
         connection.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         connection.setBorder(cardBorder(BRASS));
-        connection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
+        fullWidth(connection, 54);
         character.setForeground(Color.WHITE);
         character.setFont(character.getFont().deriveFont(Font.BOLD, 12f));
         status.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         status.setFont(status.getFont().deriveFont(9f));
         connection.add(character, BorderLayout.NORTH);
         connection.add(status, BorderLayout.SOUTH);
-        add(connection);
-        add(gap(7));
+        connectionSection.add(connection);
+        connectionSection.add(gap(7));
 
-        JPanel actions = new JPanel(new GridLayout(1, 2, 5, 0));
-        actions.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        actions.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
         connectButton.addActionListener(event -> connectAction.run());
         syncButton.addActionListener(event -> syncAction.run());
         collectionButton.addActionListener(event -> collectionAction.run());
-        actions.add(connectButton);
-        actions.add(syncButton);
-        connectButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
-        syncButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
-        add(actions);
-        collectionButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
-        collectionButton.setAlignmentX(LEFT_ALIGNMENT);
-        collectionButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
-        add(gap(5));
-        add(collectionButton);
+        styleActionButton(connectButton);
+        styleActionButton(syncButton);
+        styleActionButton(collectionButton);
+        collectionButton.setToolTipText("The overview total is captured automatically when you open it; this button syncs every section");
+        connectionSection.add(connectButton);
+        add(connectionSection);
 
-        add(gap(14));
-        add(sectionHeading("SESSION ACTIVITY"));
-        add(gap(5));
+        syncSection.add(gap(14));
+        syncSection.add(sectionHeading("SESSION ACTIVITY"));
+        syncSection.add(gap(5));
+        syncSection.add(syncButton);
+        syncSection.add(gap(5));
 
         JPanel stats = new JPanel(new GridLayout(1, 3, 4, 0));
         stats.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        stats.setMaximumSize(new Dimension(Integer.MAX_VALUE, 52));
+        fullWidth(stats, 52);
         stats.add(statCard(sessionValue, statLabel("SESSION KC")));
         stats.add(statCard(pendingValue, statLabel("PENDING")));
         stats.add(statCard(syncValue, syncMeta));
-        add(stats);
+        syncSection.add(stats);
+        add(syncSection);
 
-        add(gap(10));
+        collectionSection.add(gap(14));
+        collectionSection.add(sectionHeading("COLLECTION LOG"));
+        collectionSection.add(gap(5));
+        collectionSection.add(collectionButton);
+        collectionSection.add(gap(5));
         collectionStatus.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         collectionStatus.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
         collectionStatus.setBorder(cardBorder(MOSS));
-        collectionStatus.setAlignmentX(LEFT_ALIGNMENT);
-        collectionStatus.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
-        add(collectionStatus);
+        fullWidth(collectionStatus, 38);
+        collectionSection.add(collectionStatus);
+        add(collectionSection);
 
-        add(gap(14));
-        add(sectionHeading("RECENT COLLECTIONS LOGGED"));
-        add(gap(5));
-        add(recentCollections);
+        recentCollectionsSection.add(gap(14));
+        recentCollectionsSection.add(sectionHeading("RECENT COLLECTIONS LOGGED"));
+        recentCollectionsSection.add(gap(5));
+        recentCollectionsSection.add(recentCollections);
+        add(recentCollectionsSection);
         renderRecentCollections(Collections.emptyList());
 
-        add(gap(14));
-        add(sectionHeading("RECENT KILLS"));
-        add(gap(5));
-        add(recentKills);
+        recentKillsSection.add(gap(14));
+        recentKillsSection.add(sectionHeading("RECENT KILLS"));
+        recentKillsSection.add(gap(5));
+        recentKillsSection.add(recentKills);
+        add(recentKillsSection);
         renderRecentKills(Collections.emptyList());
 
-        add(gap(14));
-        add(sectionHeading("ACTIVE GOALS"));
-        add(gap(5));
-        add(goals);
+        goalsSection.add(gap(14));
+        goalsSection.add(sectionHeading("ACTIVE GOALS"));
+        goalsSection.add(gap(5));
+        goalsSection.add(goals);
         completedToggle.setAlignmentX(LEFT_ALIGNMENT);
         completedToggle.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         completedToggle.setMargin(new Insets(2, 7, 2, 7));
@@ -156,15 +165,15 @@ final class IronPathPanel extends PluginPanel
             completedExpanded = !completedExpanded;
             renderGoals(currentGoalProgress);
         });
-        add(gap(7));
-        add(completedToggle);
-        add(gap(4));
-        add(completedGoals);
+        goalsSection.add(gap(7));
+        goalsSection.add(completedToggle);
+        goalsSection.add(gap(4));
+        goalsSection.add(completedGoals);
+        add(goalsSection);
         renderGoals(Collections.emptyList());
 
         JButton dashboard = new JButton("Open dashboard  ↗");
-        dashboard.setAlignmentX(LEFT_ALIGNMENT);
-        dashboard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        styleActionButton(dashboard);
         dashboard.addActionListener(event -> openDashboard());
         add(gap(10));
         add(dashboard);
@@ -176,6 +185,33 @@ final class IronPathPanel extends PluginPanel
         this.syncAction = syncAction;
         this.collectionAction = collectionAction;
         this.goalStatusAction = goalStatusAction;
+    }
+
+    void setDisplayPreferences(boolean showConnection, boolean showSyncActivity, boolean showCollectionLog,
+                               boolean showRecentCollections, boolean showRecentKills, boolean showGoals)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            connectionSection.setVisible(showConnection);
+            syncSection.setVisible(showSyncActivity);
+            collectionSection.setVisible(showCollectionLog);
+            recentCollectionsSection.setVisible(showRecentCollections);
+            recentKillsSection.setVisible(showRecentKills);
+            goalsSection.setVisible(showGoals);
+            revalidate();
+            repaint();
+        });
+    }
+
+    void setCollectionOverviewProgress(IronPathDtos.CollectionLogProgress progress)
+    {
+        if (progress == null) return;
+        SwingUtilities.invokeLater(() ->
+        {
+            if (collectionSyncing) return;
+            collectionStatus.setText(String.format("Overview %,d / %,d captured", progress.obtainedCount, progress.totalCount));
+            collectionStatus.setForeground(MOSS);
+        });
     }
 
     void setConnected(boolean connected, String characterName, String detail)
@@ -233,8 +269,8 @@ final class IronPathPanel extends PluginPanel
                 collectionSyncing = true;
                 collectionFailed = false;
                 collectionButton.setEnabled(false);
-                collectionButton.setText("Reading Collection Log…");
-                collectionStatus.setText("Collection Log · reading progress…");
+                collectionButton.setText("Reading full log…");
+                collectionStatus.setText("Reading Collection Log progress…");
                 collectionStatus.setForeground(BRASS);
             }
             else if (pending > 0)
@@ -244,12 +280,12 @@ final class IronPathPanel extends PluginPanel
             }
             else if (sections > 0)
             {
-                collectionStatus.setText("Collection Log ready · click Sync Log");
+                collectionStatus.setText("Full log ready · click sync above");
                 collectionStatus.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
             }
             else
             {
-                collectionStatus.setText("Open Collection Log, then click Sync Log");
+                collectionStatus.setText("Open the overview to capture totals");
                 collectionStatus.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
             }
         });
@@ -262,7 +298,7 @@ final class IronPathPanel extends PluginPanel
             collectionSyncing = true;
             collectionFailed = false;
             collectionButton.setEnabled(false);
-            collectionButton.setText("Uploading Collection Log…");
+            collectionButton.setText("Uploading full log…");
             collectionStatus.setText("Uploading " + sections + " Collection Log sections…");
             collectionStatus.setForeground(BRASS);
         });
@@ -275,7 +311,7 @@ final class IronPathPanel extends PluginPanel
             collectionSyncing = false;
             collectionFailed = true;
             collectionButton.setEnabled(connected);
-            collectionButton.setText("Retry Collection Log Sync");
+            collectionButton.setText("Retry full log");
             collectionStatus.setText("Upload failed · " + sections + " sections queued");
             collectionStatus.setForeground(RUST);
         });
@@ -288,7 +324,7 @@ final class IronPathPanel extends PluginPanel
             collectionSyncing = false;
             collectionFailed = false;
             collectionButton.setEnabled(connected);
-            collectionButton.setText("Sync Collection Log");
+            collectionButton.setText("Sync full log");
             collectionStatus.setText("Collection Log · " + sections + " sections synced");
             collectionStatus.setForeground(MOSS);
         });
@@ -512,11 +548,36 @@ final class IronPathPanel extends PluginPanel
 
     private static JPanel verticalPanel()
     {
-        JPanel panel = new JPanel();
+        JPanel panel = new JPanel()
+        {
+            @Override
+            public Dimension getMaximumSize()
+            {
+                return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+            }
+        };
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setAlignmentX(LEFT_ALIGNMENT);
         return panel;
+    }
+
+    private static void fullWidth(JComponent component, int height)
+    {
+        component.setAlignmentX(LEFT_ALIGNMENT);
+        component.setMaximumSize(new Dimension(Integer.MAX_VALUE, height));
+        component.setPreferredSize(new Dimension(0, height));
+    }
+
+    private static void styleActionButton(JButton button)
+    {
+        fullWidth(button, 32);
+        button.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+        button.setForeground(Color.WHITE);
+        button.setBackground(new Color(42, 45, 42));
+        button.setMargin(new Insets(4, 9, 4, 9));
+        button.setFocusPainted(false);
+        button.setHorizontalAlignment(SwingConstants.CENTER);
     }
 
     private static javax.swing.border.Border cardBorder(Color accent)
@@ -530,7 +591,9 @@ final class IronPathPanel extends PluginPanel
 
     private static Component gap(int height)
     {
-        return Box.createRigidArea(new Dimension(0, height));
+        Component gap = Box.createRigidArea(new Dimension(0, height));
+        if (gap instanceof JComponent) ((JComponent) gap).setAlignmentX(LEFT_ALIGNMENT);
+        return gap;
     }
 
     private static Color kindColor(String kind)

@@ -631,7 +631,7 @@ public class IronPathPlugin extends Plugin
                 panel.setCollectionLogState(collectionLog.sectionCount(), 0, started);
                 if (!started) panel.setConnected(true,
                     client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName(),
-                    "Open your Collection Log, then click Sync Log");
+                    "Open the full Collection Log, then retry the sync");
             }
             return true;
         });
@@ -686,7 +686,8 @@ public class IronPathPlugin extends Plugin
     private boolean refreshRecentCollectionPanel()
     {
         if (collectionLog == null || panel == null) return false;
-        collectionLog.overviewProgress();
+        IronPathDtos.CollectionLogProgress progress = collectionLog.overviewProgress();
+        panel.setCollectionOverviewProgress(progress);
         List<String> names = new ArrayList<>();
         List<Integer> recentItemIds = collectionLog.recentItemIds();
         for (int itemId : recentItemIds)
@@ -1087,6 +1088,13 @@ public class IronPathPlugin extends Plugin
             kill.lastKilledAt == null ? "" : kill.lastKilledAt).reversed());
         currentPanel.setKillActivity(observedKills, pendingLootSize(), recent);
         currentPanel.setSyncState(lastSuccessfulSync, snapshotUploadInFlight.get(), pendingLootSize(), config.autoSync());
+        currentPanel.setDisplayPreferences(
+            config.showConnection(),
+            config.showSyncActivity(),
+            config.showCollectionLog(),
+            config.showRecentCollections(),
+            config.showRecentKills(),
+            config.showGoals());
         currentPanel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog != null && collectionLog.isAwaitingSearch());
         clientThread.invokeLater(() ->
         {
