@@ -78,9 +78,10 @@ final class IronPathDtos
         final List<SkillRecord> skills;
         final List<QuestRecord> quests;
         final List<ItemRecord> items;
+        final List<AbsoluteKillCount> killCounts;
 
         Snapshot(String capturedAt, String characterName, String accountType, int combatLevel, List<SkillRecord> skills,
-                 List<QuestRecord> quests, List<ItemRecord> items)
+                 List<QuestRecord> quests, List<ItemRecord> items, List<AbsoluteKillCount> killCounts)
         {
             this.capturedAt = capturedAt;
             this.characterName = characterName;
@@ -89,6 +90,21 @@ final class IronPathDtos
             this.skills = skills;
             this.quests = quests;
             this.items = items;
+            this.killCounts = killCounts;
+        }
+    }
+
+    static final class AbsoluteKillCount
+    {
+        final String sourceName;
+        final int count;
+        final String capturedAt;
+
+        AbsoluteKillCount(String sourceName, int count, String capturedAt)
+        {
+            this.sourceName = sourceName;
+            this.count = count;
+            this.capturedAt = capturedAt;
         }
     }
 
@@ -223,6 +239,20 @@ final class IronPathDtos
             this.totalCount = totalCount;
             this.capturedAt = capturedAt;
             this.slots = slots;
+        }
+    }
+
+    static final class CollectionLogSync
+    {
+        final String capturedAt;
+        final List<CollectionLogSection> sections;
+        final List<Integer> recentItemIds;
+
+        CollectionLogSync(String capturedAt, List<CollectionLogSection> sections, List<Integer> recentItemIds)
+        {
+            this.capturedAt = capturedAt;
+            this.sections = sections;
+            this.recentItemIds = recentItemIds;
         }
     }
 

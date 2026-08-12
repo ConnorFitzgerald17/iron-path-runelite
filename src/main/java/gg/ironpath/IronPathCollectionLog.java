@@ -11,9 +11,12 @@ import java.util.Set;
 import java.util.function.Consumer;
 import net.runelite.api.Client;
 import net.runelite.api.EnumComposition;
+import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptEvent;
 import net.runelite.api.StructComposition;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
 final class IronPathCollectionLog
@@ -30,6 +33,7 @@ final class IronPathCollectionLog
     private final Consumer<List<IronPathDtos.CollectionLogSection>> listener;
     private final List<PageDefinition> definitions = new ArrayList<>();
     private final Map<Integer, Integer> harvest = new HashMap<>();
+    private final List<Integer> latestItems = new ArrayList<>();
     private boolean awaitingSearch;
     private boolean receiving;
     private int lastTransmitTick = -1;
@@ -43,10 +47,38 @@ final class IronPathCollectionLog
     void collectionOpened()
     {
         if (isAnotherPlayersLog()) return;
-        awaitingSearch = loadDefinitions();
+        loadDefinitions();
+        awaitingSearch = false;
         receiving = false;
         harvest.clear();
         lastTransmitTick = -1;
+    }
+
+    boolean requestSync()
+    {
+        if (isAnotherPlayersLog() || !loadDefinitions()) return false;
+        Widget search = client.getWidget(InterfaceID.Collection.SEARCH_BUTTON);
+        if (search == null || search.isHidden()) return false;
+        harvest.clear();
+        receiving = true;
+        awaitingSearch = true;
+        lastTransmitTick = client.getTickCount();
+        client.menuAction(search.getIndex(), search.getId(), MenuAction.CC_OP, 1,
+            search.getItemId(), "Search", "");
+        return true;
+    }
+
+    List<Integer> recentItemIds()
+    {
+        Widget latest = client.getWidget(InterfaceID.CollectionOverview.LATEST_ITEMS_DATA);
+        if (latest == null) return new ArrayList<>(latestItems);
+        Set<Integer> ids = new LinkedHashSet<>();
+        collectItems(latest, ids);
+        List<Integer> result = new ArrayList<>(ids);
+        List<Integer> limited = result.size() <= 10 ? result : new ArrayList<>(result.subList(0, 10));
+        latestItems.clear();
+        latestItems.addAll(limited);
+        return new ArrayList<>(latestItems);
     }
 
     boolean onScriptPreFired(int scriptId, ScriptEvent event)
@@ -88,6 +120,7 @@ final class IronPathCollectionLog
     {
         definitions.clear();
         harvest.clear();
+        latestItems.clear();
         awaitingSearch = false;
         receiving = false;
         lastTransmitTick = -1;
@@ -148,6 +181,23 @@ final class IronPathCollectionLog
     private boolean isAnotherPlayersLog()
     {
         return client.getVarbitValue(VarbitID.COLLECTION_POH_HOST_BOOK_OPEN) == 1;
+    }
+
+    private static void collectItems(Widget widget, Set<Integer> itemIds)
+    {
+        if (widget.getItemId() > 0) itemIds.add(widget.getItemId());
+        collectItems(widget.getDynamicChildren(), itemIds);
+        collectItems(widget.getStaticChildren(), itemIds);
+        collectItems(widget.getNestedChildren(), itemIds);
+    }
+
+    private static void collectItems(Widget[] widgets, Set<Integer> itemIds)
+    {
+        if (widgets == null) return;
+        for (Widget widget : widgets)
+        {
+            if (widget != null) collectItems(widget, itemIds);
+        }
     }
 
     private static String key(String category, String name)

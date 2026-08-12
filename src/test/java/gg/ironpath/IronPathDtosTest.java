@@ -101,12 +101,29 @@ public class IronPathDtosTest
         IronPathDtos.Snapshot snapshot = new IronPathDtos.Snapshot(
             "2026-08-10T18:00:00Z", "Iron Two", "Group Ironman", 101,
             Collections.singletonList(new IronPathDtos.SkillRecord("Herblore", 70, 737627)),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList(), Collections.emptyList(),
+            Collections.singletonList(new IronPathDtos.AbsoluteKillCount("Abyssal Sire", 162, "2026-08-10T18:00:00Z")));
         String json = new Gson().toJson(snapshot);
         IronPathDtos.Snapshot restored = new Gson().fromJson(json, IronPathDtos.Snapshot.class);
         assertEquals("Group Ironman", restored.accountType);
         assertEquals(101, restored.combatLevel);
         assertEquals(737627, restored.skills.get(0).xp);
+        assertEquals(162, restored.killCounts.get(0).count);
+    }
+
+    @Test
+    public void authoritativeKillCountDoesNotDoubleCountStartingKc()
+    {
+        IronPathDtos.GoalSummary goal = new Gson().fromJson(
+            "{\"kind\":\"grind\",\"title\":\"Sire grind\",\"settings\":{\"monster\":\"Abyssal Sire\",\"startingKc\":100,\"observedKc\":4,\"dropRate\":512}}",
+            IronPathDtos.GoalSummary.class);
+        Map<String, IronPathDtos.AbsoluteKillCount> absolute = Collections.singletonMap("abyssal sire",
+            new IronPathDtos.AbsoluteKillCount("Abyssal Sire", 162, "2026-08-10T18:00:00Z"));
+
+        IronPathGoalProgress progress = IronPathGoalProgress.from(goal, Collections.emptyList(), absolute,
+            Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
+
+        assertEquals("162 total KC · 62 synced", progress.detail);
     }
 
     @Test
@@ -128,6 +145,21 @@ public class IronPathDtosTest
     {
         String json = new Gson().toJson(new IronPathDtos.GoalStatusUpdate("complete"));
         assertEquals("{\"status\":\"complete\"}", json);
+    }
+
+    @Test
+    public void serializesCollectionLogAsOneManualBatch()
+    {
+        IronPathDtos.CollectionLogSection section = new IronPathDtos.CollectionLogSection(
+            "bosses-abyssal-sire", "Bosses", "Abyssal Sire", 1, 1, "2026-08-10T18:00:00Z",
+            Collections.singletonList(new IronPathDtos.CollectionLogSlot(13262, 1, true, 0)));
+        IronPathDtos.CollectionLogSync sync = new IronPathDtos.CollectionLogSync(
+            "2026-08-10T18:00:00Z", Collections.singletonList(section), Collections.singletonList(13262));
+
+        String json = new Gson().toJson(sync);
+
+        assertEquals(true, json.contains("\"recentItemIds\":[13262]"));
+        assertEquals(true, json.contains("\"sections\":["));
     }
 
     @Test

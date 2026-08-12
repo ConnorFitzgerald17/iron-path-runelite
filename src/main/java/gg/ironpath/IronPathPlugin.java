@@ -26,9 +26,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.GameState;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
@@ -39,8 +42,10 @@ import net.runelite.api.Skill;
 import net.runelite.api.vars.AccountType;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
@@ -48,9 +53,14 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
-import net.runelite.client.events.NpcLootReceived;
+import net.runelite.client.events.ServerNpcLoot;
 import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemStack;
+import net.runelite.client.hiscore.HiscoreClient;
+import net.runelite.client.hiscore.HiscoreEndpoint;
+import net.runelite.client.hiscore.HiscoreResult;
+import net.runelite.client.hiscore.HiscoreSkill;
+import net.runelite.client.hiscore.HiscoreSkillType;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -67,14 +77,22 @@ public class IronPathPlugin extends Plugin
     private static final String TOKEN_KEY = "deviceToken";
     private static final String QUEUE_KEY = "pendingLoot";
     private static final String KILL_COUNTS_KEY = "killCounts";
+    private static final String ABSOLUTE_KILL_COUNTS_KEY = "absoluteKillCounts";
     private static final String LAST_SYNC_KEY = "lastSuccessfulSync";
     private static final String COLLECTION_QUEUE_KEY = "pendingCollectionLog";
+    private static final String COLLECTION_RECENT_KEY = "pendingCollectionRecent";
     private static final int MAX_PENDING_LOOT = 500;
     private static final int LOOT_BATCH_SIZE = 100;
     private static final int SYNC_INTERVAL_MINUTES = 2;
     private static final int GOAL_REFRESH_INTERVAL_SECONDS = 15;
     private static final String BANK_CONTAINER = "bank";
     private static final String POTION_STORAGE_CONTAINER = "potion-storage";
+    private static final Pattern COMPLETION_COUNT = Pattern.compile(
+        "Your (?<pre>completion count for |subdued |completed )?(?<boss>.+?) "
+            + "(?<post>(?:(?:kill|harvest|lap|completion|success|Total Ticket) )?(?:count )?)"
+            + "is:\\s*(?<kc>[0-9,]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern COLLECTION_HEADER_KC = Pattern.compile("(?i)(?<boss>.+?) kills?: (?<kc>[0-9,]+)");
+    private static final Pattern COLLECTION_HEADER_COMPLETION = Pattern.compile("(?i)(?<boss>.+?) completions?: (?<kc>[0-9,]+)");
 
     @Inject private Client client;
     @Inject private ClientThread clientThread;
@@ -83,15 +101,18 @@ public class IronPathPlugin extends Plugin
     @Inject private ScheduledExecutorService executor;
     @Inject private IronPathConfig config;
     @Inject private IronPathApiClient apiClient;
+    @Inject private HiscoreClient hiscoreClient;
     @Inject private Gson gson;
 
     private final Map<String, Map<Integer, Integer>> containerSnapshots = new HashMap<>();
     private final List<IronPathDtos.LootEvent> pendingLoot = new ArrayList<>();
     private final Map<Integer, IronPathDtos.KillCount> trackedKills = new HashMap<>();
+    private final Map<String, IronPathDtos.AbsoluteKillCount> absoluteKillCounts = new ConcurrentHashMap<>();
     private final Map<String, Integer> liveSkillLevels = new ConcurrentHashMap<>();
     private final Map<String, Integer> liveSkillXps = new ConcurrentHashMap<>();
     private final Map<String, String> liveQuestStates = new ConcurrentHashMap<>();
     private final Map<String, IronPathDtos.CollectionLogSection> pendingCollectionLog = new HashMap<>();
+    private final List<Integer> pendingCollectionRecent = new ArrayList<>();
     private final AtomicBoolean snapshotUploadInFlight = new AtomicBoolean();
     private final AtomicBoolean goalRefreshInFlight = new AtomicBoolean();
     private final AtomicLong goalRefreshSequence = new AtomicLong();
@@ -121,7 +142,7 @@ public class IronPathPlugin extends Plugin
         running = true;
         panel = new IronPathPanel();
         collectionLog = new IronPathCollectionLog(client, this::queueCollectionLog);
-        panel.setActions(this::connect, this::requestFullSync, this::updateGoalStatus);
+        panel.setActions(this::connect, this::requestManualSync, this::requestCollectionLogSync, this::updateGoalStatus);
         navigationButton = NavigationButton.builder()
             .tooltip("Iron Path")
             .icon(createPanelIcon())
@@ -161,16 +182,19 @@ public class IronPathPlugin extends Plugin
         goalRefreshInFlight.set(false);
         savePendingLoot();
         saveKillCounts();
+        saveAbsoluteKillCounts();
         savePendingCollectionLog();
         if (navigationButton != null) clientToolbar.removeNavigation(navigationButton);
         panel = null;
         navigationButton = null;
         containerSnapshots.clear();
         trackedKills.clear();
+        absoluteKillCounts.clear();
         liveSkillLevels.clear();
         liveSkillXps.clear();
         liveQuestStates.clear();
         pendingCollectionLog.clear();
+        pendingCollectionRecent.clear();
         if (collectionLog != null) collectionLog.reset();
         currentGoals = Collections.emptyList();
     }
@@ -180,14 +204,20 @@ public class IronPathPlugin extends Plugin
     {
         if (event.getGameState() == GameState.LOGGED_IN)
         {
-            executor.schedule(this::requestFullSync, 3, TimeUnit.SECONDS);
+            executor.schedule(this::requestManualSync, 3, TimeUnit.SECONDS);
         }
     }
 
     @Subscribe
     public void onWidgetLoaded(WidgetLoaded event)
     {
-        if (event.getGroupId() != InterfaceID.COLLECTION || collectionLog == null) return;
+        if (collectionLog == null) return;
+        if (event.getGroupId() == InterfaceID.COLLECTION_OVERVIEW)
+        {
+            clientThread.invokeLater(this::refreshRecentCollectionPanel);
+            return;
+        }
+        if (event.getGroupId() != InterfaceID.COLLECTION) return;
         clientThread.invokeLater(() ->
         {
             collectionLog.collectionOpened();
@@ -200,6 +230,22 @@ public class IronPathPlugin extends Plugin
     public void onScriptPreFired(ScriptPreFired event)
     {
         if (collectionLog != null) collectionLog.onScriptPreFired(event.getScriptId(), event.getScriptEvent());
+    }
+
+    @Subscribe
+    public void onScriptPostFired(ScriptPostFired event)
+    {
+        if (event.getScriptId() == net.runelite.api.ScriptID.COLLECTION_DRAW_LIST)
+        {
+            captureCollectionHeaderKillCount();
+        }
+    }
+
+    @Subscribe
+    public void onChatMessage(ChatMessage event)
+    {
+        if (event.getType() != ChatMessageType.GAMEMESSAGE && event.getType() != ChatMessageType.SPAM) return;
+        captureAbsoluteKillCount(event.getMessage(), COMPLETION_COUNT);
     }
 
     @Subscribe
@@ -229,9 +275,11 @@ public class IronPathPlugin extends Plugin
         {
             trackedKills.clear();
         }
+        absoluteKillCounts.clear();
         synchronized (pendingCollectionLog)
         {
             pendingCollectionLog.clear();
+            pendingCollectionRecent.clear();
         }
         loadProfileState();
         containerSnapshots.clear();
@@ -243,7 +291,7 @@ public class IronPathPlugin extends Plugin
         observedKills = 0;
         refreshConnectionState();
         updatePanelData();
-        requestFullSync();
+        requestManualSync();
     }
 
     @Subscribe
@@ -277,7 +325,7 @@ public class IronPathPlugin extends Plugin
     }
 
     @Subscribe
-    public void onNpcLootReceived(NpcLootReceived event)
+    public void onServerNpcLoot(ServerNpcLoot event)
     {
         List<IronPathDtos.LootItem> items = new ArrayList<>();
         for (ItemStack stack : event.getItems())
@@ -288,8 +336,8 @@ public class IronPathPlugin extends Plugin
             }
         }
         String occurredAt = Instant.now().toString();
-        int npcId = event.getNpc().getId();
-        String npcName = event.getNpc().getName() == null ? "Unknown NPC" : event.getNpc().getName();
+        int npcId = event.getComposition().getId();
+        String npcName = event.getComposition().getName() == null ? "Unknown NPC" : event.getComposition().getName();
         IronPathDtos.LootEvent loot = new IronPathDtos.LootEvent(
             UUID.randomUUID().toString(), occurredAt, npcId, npcName, items);
         synchronized (pendingLoot)
@@ -305,6 +353,8 @@ public class IronPathPlugin extends Plugin
             count.record(npcName, occurredAt);
             saveKillCounts();
         }
+        IronPathDtos.AbsoluteKillCount absolute = absoluteKillCounts.get(normalize(npcName));
+        if (absolute != null) mergeAbsoluteKillCount(npcName, absolute.count + 1, occurredAt);
         observedKills++;
         updatePanelData();
         flushPendingLoot();
@@ -337,7 +387,7 @@ public class IronPathPlugin extends Plugin
             }
             configManager.setRSProfileConfiguration(IronPathConfig.GROUP, TOKEN_KEY, response.token);
             panel.setConnected(true, characterName, "Connected · first sync pending");
-            requestFullSync();
+            requestManualSync();
         });
     }
 
@@ -356,7 +406,27 @@ public class IronPathPlugin extends Plugin
         clientThread.invokeLater(this::syncSnapshot);
         refreshGoals();
         flushPendingLoot();
-        flushPendingCollectionLog();
+    }
+
+    private void requestManualSync()
+    {
+        if (!running) return;
+        refreshRuneLiteKillCounts();
+        String playerName = client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName();
+        if (playerName == null)
+        {
+            requestFullSync();
+            return;
+        }
+        long requestGeneration = profileGeneration;
+        hiscoreClient.lookupAsync(playerName, HiscoreEndpoint.NORMAL).whenComplete((result, error) ->
+        {
+            if (requestGeneration == profileGeneration && error == null && result != null)
+            {
+                mergeHiscoreKillCounts(result);
+            }
+            requestFullSync();
+        });
     }
 
     private void syncSnapshot()
@@ -394,7 +464,8 @@ public class IronPathPlugin extends Plugin
         long requestGeneration = profileGeneration;
         IronPathDtos.Snapshot snapshot = new IronPathDtos.Snapshot(
             Instant.now().toString(), characterName, accountType(client.getAccountType()),
-            client.getLocalPlayer().getCombatLevel(), skills, quests, items);
+            client.getLocalPlayer().getCombatLevel(), skills, quests, items,
+            new ArrayList<>(absoluteKillCounts.values()));
         panel.setConnected(true, characterName, "Uploading snapshot…");
         panel.setSyncState(lastSuccessfulSync, true, pendingLootSize(), config.autoSync());
         updateGoalProgress();
@@ -522,42 +593,177 @@ public class IronPathPlugin extends Plugin
         synchronized (pendingCollectionLog)
         {
             for (IronPathDtos.CollectionLogSection section : sections) pendingCollectionLog.put(section.key, section);
+            pendingCollectionRecent.clear();
+            pendingCollectionRecent.addAll(collectionLog.recentItemIds());
             savePendingCollectionLog();
         }
         if (panel != null) panel.setCollectionLogState(sections.size(), pendingCollectionLogSize(), false);
         flushPendingCollectionLog();
     }
 
+    private void requestCollectionLogSync()
+    {
+        if (!running || token() == null || collectionLog == null) return;
+        synchronized (pendingCollectionLog)
+        {
+            if (!pendingCollectionLog.isEmpty())
+            {
+                flushPendingCollectionLog();
+                return;
+            }
+        }
+        clientThread.invokeLater(() ->
+        {
+            boolean started = collectionLog.requestSync();
+            if (panel != null)
+            {
+                panel.setCollectionLogState(collectionLog.sectionCount(), 0, started);
+                if (!started) panel.setConnected(true,
+                    client.getLocalPlayer() == null ? null : client.getLocalPlayer().getName(),
+                    "Open your Collection Log, then click Sync Log");
+            }
+            return true;
+        });
+    }
+
     private void flushPendingCollectionLog()
     {
         String token = token();
         if (token == null) return;
-        IronPathDtos.CollectionLogSection section;
+        IronPathDtos.CollectionLogSync sync;
         synchronized (pendingCollectionLog)
         {
             if (collectionUploadInFlight || pendingCollectionLog.isEmpty()) return;
-            section = pendingCollectionLog.values().iterator().next();
+            List<IronPathDtos.CollectionLogSection> sections = new ArrayList<>(pendingCollectionLog.values());
+            sections.sort(Comparator.comparing(section -> section.key));
+            String capturedAt = sections.stream().map(section -> section.capturedAt).max(String::compareTo)
+                .orElse(Instant.now().toString());
+            sync = new IronPathDtos.CollectionLogSync(capturedAt, sections, new ArrayList<>(pendingCollectionRecent));
             collectionUploadInFlight = true;
         }
+        if (panel != null) panel.setCollectionLogUploading(sync.sections.size());
         long requestGeneration = profileGeneration;
-        apiClient.sendCollectionLogSection(token, section, success ->
+        apiClient.sendCollectionLog(token, sync, success ->
         {
             if (requestGeneration != profileGeneration) return;
-            boolean hasMore;
             synchronized (pendingCollectionLog)
             {
                 if (success)
                 {
-                    IronPathDtos.CollectionLogSection current = pendingCollectionLog.get(section.key);
-                    if (current != null && current.capturedAt.equals(section.capturedAt)) pendingCollectionLog.remove(section.key);
+                    for (IronPathDtos.CollectionLogSection uploaded : sync.sections)
+                    {
+                        IronPathDtos.CollectionLogSection current = pendingCollectionLog.get(uploaded.key);
+                        if (current != null && current.capturedAt.equals(uploaded.capturedAt)) pendingCollectionLog.remove(uploaded.key);
+                    }
+                    if (pendingCollectionLog.isEmpty()) pendingCollectionRecent.clear();
                     savePendingCollectionLog();
                 }
                 collectionUploadInFlight = false;
-                hasMore = success && !pendingCollectionLog.isEmpty();
             }
-            if (panel != null) panel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), false);
-            if (hasMore) flushPendingCollectionLog();
+            if (panel != null)
+            {
+                if (success && pendingCollectionLogSize() == 0) panel.setCollectionLogSynced(sync.sections.size());
+                else if (!success) panel.setCollectionLogFailed(pendingCollectionLogSize());
+                else panel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), false);
+            }
         });
+    }
+
+    private void refreshRecentCollectionPanel()
+    {
+        if (collectionLog == null || panel == null) return;
+        List<String> names = new ArrayList<>();
+        for (int itemId : collectionLog.recentItemIds())
+        {
+            String name = client.getItemDefinition(itemId).getName();
+            if (name != null && !name.trim().isEmpty()) names.add(name);
+            if (names.size() == 3) break;
+        }
+        panel.setRecentCollections(names);
+    }
+
+    private void captureCollectionHeaderKillCount()
+    {
+        Widget root = client.getWidget(InterfaceID.COLLECTION, 0);
+        if (root != null) captureWidgetKillCount(root);
+    }
+
+    private void captureWidgetKillCount(Widget widget)
+    {
+        captureAbsoluteKillCount(widget.getText(), COLLECTION_HEADER_KC);
+        captureAbsoluteKillCount(widget.getText(), COLLECTION_HEADER_COMPLETION);
+        captureWidgetKillCount(widget.getDynamicChildren());
+        captureWidgetKillCount(widget.getStaticChildren());
+        captureWidgetKillCount(widget.getNestedChildren());
+    }
+
+    private void captureWidgetKillCount(Widget[] widgets)
+    {
+        if (widgets == null) return;
+        for (Widget widget : widgets) if (widget != null) captureWidgetKillCount(widget);
+    }
+
+    private void captureAbsoluteKillCount(String rawText, Pattern pattern)
+    {
+        if (rawText == null) return;
+        String text = net.runelite.client.util.Text.removeTags(rawText).trim();
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) return;
+        if (pattern == COMPLETION_COUNT
+            && (matcher.group("pre") == null || matcher.group("pre").isEmpty())
+            && (matcher.group("post") == null || matcher.group("post").isEmpty())) return;
+        String name = matcher.group("boss").trim();
+        try
+        {
+            mergeAbsoluteKillCount(name, Integer.parseInt(matcher.group("kc").replace(",", "")), Instant.now().toString());
+        }
+        catch (NumberFormatException ignored)
+        {
+            // Ignore malformed game text.
+        }
+    }
+
+    private void mergeAbsoluteKillCount(String sourceName, int count, String capturedAt)
+    {
+        if (sourceName == null || sourceName.trim().isEmpty() || count < 0) return;
+        String key = normalize(sourceName);
+        absoluteKillCounts.compute(key, (ignored, current) -> current == null || count > current.count
+            ? new IronPathDtos.AbsoluteKillCount(sourceName.trim(), count, capturedAt) : current);
+        saveAbsoluteKillCounts();
+        updateGoalProgress();
+    }
+
+    private void mergeHiscoreKillCounts(HiscoreResult result)
+    {
+        String capturedAt = Instant.now().toString();
+        for (HiscoreSkill skill : HiscoreSkill.values())
+        {
+            if (skill.getType() != HiscoreSkillType.BOSS) continue;
+            net.runelite.client.hiscore.Skill value = result.getSkill(skill);
+            if (value != null && value.getLevel() >= 0)
+            {
+                mergeAbsoluteKillCount(skill.getName(), value.getLevel(), capturedAt);
+            }
+        }
+    }
+
+    private void refreshRuneLiteKillCounts()
+    {
+        String profile = configManager.getRSProfileKey();
+        if (profile == null) return;
+        String capturedAt = Instant.now().toString();
+        for (String key : configManager.getRSProfileConfigurationKeys("killcount", profile, ""))
+        {
+            String value = configManager.getConfiguration("killcount", profile, key);
+            try
+            {
+                mergeAbsoluteKillCount(key, Integer.parseInt(value), capturedAt);
+            }
+            catch (NumberFormatException ignored)
+            {
+                // RuneLite may keep non-KC values in the same group.
+            }
+        }
     }
 
     private void captureLiveContainers()
@@ -712,6 +918,7 @@ public class IronPathPlugin extends Plugin
         loadPendingLoot();
         loadPendingCollectionLog();
         loadKillCounts();
+        loadAbsoluteKillCounts();
         String storedSync = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, LAST_SYNC_KEY);
         try
         {
@@ -741,6 +948,10 @@ public class IronPathPlugin extends Plugin
                     }
                 }
             }
+            List<Integer> recent = gson.fromJson(
+                configManager.getRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_RECENT_KEY),
+                new TypeToken<List<Integer>>() {}.getType());
+            if (recent != null) pendingCollectionRecent.addAll(recent);
         }
         catch (RuntimeException error)
         {
@@ -752,9 +963,48 @@ public class IronPathPlugin extends Plugin
     private void savePendingCollectionLog()
     {
         if (configManager.getRSProfileKey() == null) return;
-        if (pendingCollectionLog.isEmpty()) configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY);
-        else configManager.setRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY,
-            gson.toJson(new ArrayList<>(pendingCollectionLog.values())));
+        if (pendingCollectionLog.isEmpty())
+        {
+            configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY);
+            configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_RECENT_KEY);
+        }
+        else
+        {
+            configManager.setRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_QUEUE_KEY,
+                gson.toJson(new ArrayList<>(pendingCollectionLog.values())));
+            configManager.setRSProfileConfiguration(IronPathConfig.GROUP, COLLECTION_RECENT_KEY,
+                gson.toJson(pendingCollectionRecent));
+        }
+    }
+
+    private void loadAbsoluteKillCounts()
+    {
+        String json = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, ABSOLUTE_KILL_COUNTS_KEY);
+        if (json == null || json.isEmpty()) return;
+        try
+        {
+            List<IronPathDtos.AbsoluteKillCount> stored = gson.fromJson(json,
+                new TypeToken<List<IronPathDtos.AbsoluteKillCount>>() {}.getType());
+            if (stored != null)
+            {
+                for (IronPathDtos.AbsoluteKillCount count : stored)
+                {
+                    if (count != null) mergeAbsoluteKillCount(count.sourceName, count.count, count.capturedAt);
+                }
+            }
+        }
+        catch (RuntimeException error)
+        {
+            LOGGER.log(Level.WARNING, "Discarding malformed absolute kill counts", error);
+            configManager.unsetRSProfileConfiguration(IronPathConfig.GROUP, ABSOLUTE_KILL_COUNTS_KEY);
+        }
+    }
+
+    private void saveAbsoluteKillCounts()
+    {
+        if (configManager.getRSProfileKey() == null) return;
+        configManager.setRSProfileConfiguration(IronPathConfig.GROUP, ABSOLUTE_KILL_COUNTS_KEY,
+            gson.toJson(new ArrayList<>(absoluteKillCounts.values())));
     }
 
     private void loadKillCounts()
@@ -821,6 +1071,7 @@ public class IronPathPlugin extends Plugin
         currentPanel.setKillActivity(observedKills, pendingLootSize(), recent);
         currentPanel.setSyncState(lastSuccessfulSync, snapshotUploadInFlight.get(), pendingLootSize(), config.autoSync());
         currentPanel.setCollectionLogState(collectionLog == null ? 0 : collectionLog.sectionCount(), pendingCollectionLogSize(), collectionLog != null && collectionLog.isAwaitingSearch());
+        clientThread.invokeLater(this::refreshRecentCollectionPanel);
         updateGoalProgress();
     }
 
@@ -837,7 +1088,8 @@ public class IronPathPlugin extends Plugin
         for (IronPathDtos.GoalSummary goal : currentGoals)
         {
             progress.add(IronPathGoalProgress.from(goal, kills,
-                new HashMap<>(liveSkillLevels), new HashMap<>(liveSkillXps), new HashMap<>(liveQuestStates)));
+                new HashMap<>(absoluteKillCounts), new HashMap<>(liveSkillLevels),
+                new HashMap<>(liveSkillXps), new HashMap<>(liveQuestStates)));
         }
         currentPanel.setGoals(progress);
     }

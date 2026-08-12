@@ -34,12 +34,23 @@ final class IronPathGoalProgress
         Map<String, Integer> skillLevels,
         Map<String, String> questStates)
     {
-        return from(goal, kills, skillLevels, Collections.emptyMap(), questStates);
+        return from(goal, kills, Collections.emptyMap(), skillLevels, Collections.emptyMap(), questStates);
     }
 
     static IronPathGoalProgress from(
         IronPathDtos.GoalSummary goal,
         Collection<IronPathDtos.KillCount> kills,
+        Map<String, Integer> skillLevels,
+        Map<String, Integer> skillXps,
+        Map<String, String> questStates)
+    {
+        return from(goal, kills, Collections.emptyMap(), skillLevels, skillXps, questStates);
+    }
+
+    static IronPathGoalProgress from(
+        IronPathDtos.GoalSummary goal,
+        Collection<IronPathDtos.KillCount> kills,
+        Map<String, IronPathDtos.AbsoluteKillCount> absoluteKillCounts,
         Map<String, Integer> skillLevels,
         Map<String, Integer> skillXps,
         Map<String, String> questStates)
@@ -56,7 +67,10 @@ final class IronPathGoalProgress
                 .filter(kill -> npcIds.contains(kill.npcId))
                 .mapToInt(kill -> kill.count)
                 .sum();
-            int observed = Math.max(settings.observedKc, locallyTracked);
+            IronPathDtos.AbsoluteKillCount authoritative = absoluteKillCount(absoluteKillCounts, settings.monster);
+            int authoritativeObserved = authoritative == null ? 0
+                : Math.max(0, authoritative.count - Math.max(0, settings.startingKc));
+            int observed = Math.max(settings.observedKc, Math.max(locallyTracked, authoritativeObserved));
             int total = Math.max(0, settings.startingKc) + observed;
             int rate = Math.max(0, settings.dropRate);
             int percent = rate == 0 ? 0 : (int) Math.round(observed * 100d / rate);
@@ -107,6 +121,15 @@ final class IronPathGoalProgress
     {
         return value == null ? "" : value.trim().toLowerCase(Locale.ENGLISH).replace('_', ' ').replace('-', ' ')
             .replaceAll("\\s+", " ");
+    }
+
+    private static IronPathDtos.AbsoluteKillCount absoluteKillCount(
+        Map<String, IronPathDtos.AbsoluteKillCount> counts, String monster)
+    {
+        String key = normalize(monster);
+        IronPathDtos.AbsoluteKillCount count = counts.get(key);
+        if (count != null) return count;
+        return key.startsWith("the ") ? counts.get(key.substring(4)) : counts.get("the " + key);
     }
 
     private static String nonEmpty(String value, String fallback)

@@ -31,7 +31,7 @@ final class IronPathApiClient
 
     void exchangeCode(String code, String characterName, Consumer<IronPathDtos.LinkResponse> callback)
     {
-        IronPathDtos.LinkRequest payload = new IronPathDtos.LinkRequest(code, characterName, "0.4.1");
+        IronPathDtos.LinkRequest payload = new IronPathDtos.LinkRequest(code, characterName, "0.4.2");
         post("/api/plugin/v1/link/exchange", null, gson.toJson(payload), response ->
         {
             IronPathDtos.LinkResponse result = response.body == null
@@ -55,9 +55,9 @@ final class IronPathApiClient
         post("/api/plugin/v1/loot-events", token, gson.toJson(new IronPathDtos.LootBatch(events)), response -> callback.accept(response.success));
     }
 
-    void sendCollectionLogSection(String token, IronPathDtos.CollectionLogSection section, Consumer<Boolean> callback)
+    void sendCollectionLog(String token, IronPathDtos.CollectionLogSync sync, Consumer<Boolean> callback)
     {
-        post("/api/plugin/v1/collection-log", token, gson.toJson(section), response -> callback.accept(response.success));
+        post("/api/plugin/v1/collection-log", token, gson.toJson(sync), response -> callback.accept(response.success));
     }
 
     void fetchGoals(String token, Consumer<IronPathDtos.GoalsResponse> callback)
@@ -105,7 +105,7 @@ final class IronPathApiClient
         String origin = config.apiOrigin().replaceAll("/+$", "");
         Request.Builder builder = new Request.Builder()
             .url(origin + path)
-            .header("User-Agent", "IronPath-RuneLite/0.4.1");
+            .header("User-Agent", "IronPath-RuneLite/0.4.2");
         if (token != null && !token.isEmpty())
         {
             builder.header("Authorization", "Bearer " + token);
