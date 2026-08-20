@@ -3,12 +3,10 @@ package gg.ironpath;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.Insets;
-import java.net.URI;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -28,6 +26,7 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.util.LinkBrowser;
 
 final class IronPathPanel extends PluginPanel
 {
@@ -675,10 +674,7 @@ final class IronPathPanel extends PluginPanel
     {
         try
         {
-            if (Desktop.isDesktopSupported())
-            {
-                Desktop.getDesktop().browse(new URI(IronPathConfig.DEFAULT_API_ORIGIN));
-            }
+            LinkBrowser.browse(IronPathConfig.DEFAULT_API_ORIGIN);
         }
         catch (Exception ignored)
         {
