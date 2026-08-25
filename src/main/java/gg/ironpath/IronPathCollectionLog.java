@@ -15,6 +15,7 @@ import net.runelite.api.Client;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptEvent;
+import net.runelite.api.ScriptID;
 import net.runelite.api.StructComposition;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
@@ -62,17 +63,21 @@ final class IronPathCollectionLog
     boolean requestSync()
     {
         if (isAnotherPlayersLog() || !loadDefinitions()) return false;
-        Widget search = findSearchWidget();
-        if (search == null) return false;
-        int operation = actionIndex(search, "Search");
-        if (operation < 1) operation = 1;
+        Widget search = client.getWidget(InterfaceID.Collection.SEARCH_TOGGLE);
+        if (search == null || search.isHidden()) return false;
         harvest.clear();
         receiving = true;
         awaitingSearch = true;
         lastTransmitTick = client.getTickCount();
-        client.menuAction(search.getIndex(), search.getId(), MenuAction.CC_OP, operation,
-            search.getItemId(), "Search", "");
+        triggerCollectionLogSearch(client);
         return true;
+    }
+
+    static void triggerCollectionLogSearch(Client client)
+    {
+        client.menuAction(-1, InterfaceID.Collection.SEARCH_TOGGLE, MenuAction.CC_OP, 1,
+            -1, "Search", null);
+        client.runScript(ScriptID.COLLECTION_DRAW_LIST);
     }
 
     List<Integer> recentItemIds()
@@ -107,58 +112,6 @@ final class IronPathCollectionLog
         }
         if (progress != null) latestProgress = progress;
         return latestProgress;
-    }
-
-    private Widget findSearchWidget()
-    {
-        int[] candidates = {
-            InterfaceID.Collection.SEARCH_BUTTON,
-            InterfaceID.Collection.SEARCH_TOGGLE_CLICKZONE,
-            InterfaceID.Collection.SEARCH_TOGGLE
-        };
-        Widget visibleFallback = null;
-        for (int candidate : candidates)
-        {
-            Widget widget = client.getWidget(candidate);
-            if (widget == null || widget.isHidden()) continue;
-            if (actionIndex(widget, "Search") > 0) return widget;
-            if (visibleFallback == null) visibleFallback = widget;
-        }
-        Widget actionWidget = findActionWidget(client.getWidget(InterfaceID.Collection.UNIVERSE), "Search");
-        return actionWidget == null ? visibleFallback : actionWidget;
-    }
-
-    private static Widget findActionWidget(Widget widget, String action)
-    {
-        if (widget == null || widget.isHidden()) return null;
-        if (actionIndex(widget, action) > 0) return widget;
-        Widget found = findActionWidget(widget.getDynamicChildren(), action);
-        if (found != null) return found;
-        found = findActionWidget(widget.getStaticChildren(), action);
-        return found == null ? findActionWidget(widget.getNestedChildren(), action) : found;
-    }
-
-    private static Widget findActionWidget(Widget[] widgets, String action)
-    {
-        if (widgets == null) return null;
-        for (Widget widget : widgets)
-        {
-            Widget found = findActionWidget(widget, action);
-            if (found != null) return found;
-        }
-        return null;
-    }
-
-    private static int actionIndex(Widget widget, String action)
-    {
-        String[] actions = widget == null ? null : widget.getActions();
-        if (actions == null) return -1;
-        for (int index = 0; index < actions.length; index++)
-        {
-            String candidate = actions[index];
-            if (candidate != null && action.equalsIgnoreCase(Text.removeTags(candidate).trim())) return index + 1;
-        }
-        return -1;
     }
 
     boolean onScriptPreFired(int scriptId, ScriptEvent event)
