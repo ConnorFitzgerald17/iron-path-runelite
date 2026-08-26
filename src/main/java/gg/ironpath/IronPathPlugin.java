@@ -75,6 +75,7 @@ public class IronPathPlugin extends Plugin
 {
     private static final Logger LOGGER = Logger.getLogger(IronPathPlugin.class.getName());
     private static final String TOKEN_KEY = "deviceToken";
+    private static final String TOKEN_ORIGIN_KEY = "deviceTokenOrigin";
     private static final String QUEUE_KEY = "pendingLoot";
     private static final String KILL_COUNTS_KEY = "killCounts";
     private static final String ABSOLUTE_KILL_COUNTS_KEY = "absoluteKillCounts";
@@ -405,12 +406,19 @@ public class IronPathPlugin extends Plugin
             panel.setConnected(false, client.getLocalPlayer().getName(), "Add the website linking code in settings");
             return;
         }
+        String apiOrigin = IronPathApiClient.normalizeApiOrigin(config.apiOrigin());
+        if (apiOrigin == null)
+        {
+            panel.setConnected(false, client.getLocalPlayer().getName(), "API origin must be a valid HTTPS URL");
+            return;
+        }
         String characterName = client.getLocalPlayer().getName();
         long requestGeneration = profileGeneration;
         panel.setConnected(false, characterName, "Exchanging linking code…");
         apiClient.exchangeCode(code, characterName, response ->
         {
-            if (requestGeneration != profileGeneration) return;
+            if (requestGeneration != profileGeneration
+                || !apiOrigin.equals(IronPathApiClient.normalizeApiOrigin(config.apiOrigin()))) return;
             if (response == null || response.token == null)
             {
                 panel.setConnected(false, characterName,
@@ -418,6 +426,7 @@ public class IronPathPlugin extends Plugin
                 return;
             }
             configManager.setRSProfileConfiguration(IronPathConfig.GROUP, TOKEN_KEY, response.token);
+            configManager.setRSProfileConfiguration(IronPathConfig.GROUP, TOKEN_ORIGIN_KEY, apiOrigin);
             panel.setConnected(true, characterName, "Connected · first sync pending");
             requestManualSync();
         });
@@ -742,7 +751,7 @@ public class IronPathPlugin extends Plugin
 
     private void captureCollectionHeaderKillCount()
     {
-        Widget root = client.getWidget(InterfaceID.COLLECTION, 0);
+        Widget root = client.getWidget(InterfaceID.Collection.FRAME);
         if (root != null) captureWidgetKillCount(root);
     }
 
@@ -935,7 +944,20 @@ public class IronPathPlugin extends Plugin
     private String token()
     {
         String value = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, TOKEN_KEY);
-        return value == null || value.trim().isEmpty() ? null : value;
+        if (value == null || value.trim().isEmpty()) return null;
+        String storedOrigin = configManager.getRSProfileConfiguration(IronPathConfig.GROUP, TOKEN_ORIGIN_KEY);
+        return tokenOriginMatches(config.apiOrigin(), storedOrigin) ? value : null;
+    }
+
+    static boolean tokenOriginMatches(String configuredOrigin, String storedOrigin)
+    {
+        String normalizedConfigured = IronPathApiClient.normalizeApiOrigin(configuredOrigin);
+        if (normalizedConfigured == null) return false;
+        if (storedOrigin == null || storedOrigin.trim().isEmpty())
+        {
+            return normalizedConfigured.equals(IronPathConfig.DEFAULT_API_ORIGIN);
+        }
+        return normalizedConfigured.equals(IronPathApiClient.normalizeApiOrigin(storedOrigin));
     }
 
     private void loadPendingLoot()

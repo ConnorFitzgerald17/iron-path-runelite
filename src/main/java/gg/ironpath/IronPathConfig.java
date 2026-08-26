@@ -38,7 +38,7 @@ public interface IronPathConfig extends Config
     @ConfigItem(
         keyName = "apiOrigin",
         name = "API origin",
-        description = "Web application origin that receives synchronized Iron Path data",
+        description = "HTTPS web application origin that receives synchronized Iron Path data; changing it requires relinking",
         position = 0,
         section = connectionSection
     )
@@ -65,12 +65,13 @@ public interface IronPathConfig extends Config
         keyName = "autoSync",
         name = "Automatic sync",
         description = "Refresh goals every 15 seconds, sync progress every two minutes, and sync bank changes shortly after they occur",
+        warning = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
         position = 0,
         section = syncSection
     )
     default boolean autoSync()
     {
-        return true;
+        return false;
     }
 
     @ConfigItem(

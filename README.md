@@ -6,14 +6,14 @@ The web application and API are live at [ironpathosrs.com](https://www.ironpatho
 
 ## Data and privacy
 
-Iron Path does not send game data until you explicitly link the logged-in RuneScape profile with a single-use code from the website. Once linked, the plugin sends the following data to the configured **API origin** over HTTP(S):
+Iron Path does not send game data until you explicitly link the logged-in RuneScape profile with a single-use code from the website. Once linked, the plugin sends the following data to the configured **API origin** over HTTPS:
 
 - RuneScape character name, exact account mode, combat level, total level, individual skill levels, and XP.
 - Quest states plus bank, inventory, and equipment item IDs and quantities.
 - Observed NPC kills, loot item IDs and quantities, and Collection Log item counts.
 - Iron Path goals and the live progress used to display or update them.
 
-The plugin does not read or send Jagex login details, RuneLite credentials, email credentials, or Discord credentials. The API device token and retry queues are stored in RuneLite's per-character profile storage, which prevents one linked character from synchronizing into another character's journal. Changing **API origin** changes the server that receives the data listed above.
+The plugin does not read or send Jagex login details, RuneLite credentials, email credentials, or Discord credentials. The API device token, its issuing HTTPS origin, and retry queues are stored in RuneLite's per-character profile storage, which prevents one linked character from synchronizing into another character's journal. Changing **API origin** requires relinking and never sends an existing origin's token to the new server.
 
 ## Development
 
@@ -27,11 +27,11 @@ For IDE configuration on this Intel Mac, the installed JDK home is `/usr/local/o
 
 This compiles the plugin and runs its unit tests without installing or launching the RuneLite desktop client. When you are ready to test inside RuneLite developer mode, use `./gradlew run`.
 
-For local web development, set **API origin** to `http://localhost:3000`. Generate a verification code on the web, paste it into plugin settings, log into the character being claimed, and press **Connect**. The verified RuneLite identity creates the journal on first sync. With the web app in demo mode, its exchange endpoint returns the scoped `demo-device-token`.
+For local web development, expose the local application through HTTPS and set **API origin** to that secure origin. Generate a verification code on the web, paste it into plugin settings, log into the character being claimed, and press **Connect**. The verified RuneLite identity creates the journal on first sync. With the web app in demo mode, its exchange endpoint returns the scoped `demo-device-token`.
 
 ## Sync behavior
 
-- RSN, exact account mode, combat/total levels, skills, quests, inventory, and equipment: login, manual sync, and every two minutes.
+- RSN, exact account mode, combat/total levels, skills, quests, inventory, and equipment: login, manual sync, and every two minutes when automatic sync is enabled.
 - Dashboard goals: startup, login, manual sync, and every 15 seconds while automatic sync is enabled.
 - Bank: two seconds after the last bank container change.
 - Collection Log: open the Collection Log overview once so RuneLite can expose its latest items, then open the full log and use Iron Path's **Sync Collection Log** button. The plugin captures the authoritative full-log result, keeps the last successfully read recent-items list when the overview is unavailable, queues the newest copy of every section, and retries failed uploads against the active RuneScape profile.
@@ -40,7 +40,7 @@ For local web development, set **API origin** to `http://localhost:3000`. Genera
 - Offline queue: capped at 500 events and flushed in batches of 100 to keep requests small.
 - Tokens, kill totals, sync timestamps, and loot/Collection Log offline queues: stored against RuneLite's current RuneScape profile.
 
-Link each RuneScape character to its chosen web journal once. After that, changing RuneScape profiles automatically loads the matching scoped token; an unlinked profile remains disconnected and cannot overwrite another journal.
+Link each RuneScape character to its chosen web journal once, then explicitly enable **Automatic sync** if desired. After that, changing RuneScape profiles automatically loads the matching scoped token; an unlinked profile remains disconnected and cannot overwrite another journal.
 
 ## Plugin panel
 

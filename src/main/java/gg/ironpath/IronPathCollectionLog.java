@@ -15,7 +15,6 @@ import net.runelite.api.Client;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptEvent;
-import net.runelite.api.ScriptID;
 import net.runelite.api.StructComposition;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
@@ -69,15 +68,10 @@ final class IronPathCollectionLog
         receiving = true;
         awaitingSearch = true;
         lastTransmitTick = client.getTickCount();
-        triggerCollectionLogSearch(client);
-        return true;
-    }
-
-    static void triggerCollectionLogSearch(Client client)
-    {
         client.menuAction(-1, InterfaceID.Collection.SEARCH_TOGGLE, MenuAction.CC_OP, 1,
             -1, "Search", null);
-        client.runScript(ScriptID.COLLECTION_DRAW_LIST);
+        client.runScript(2240);
+        return true;
     }
 
     List<Integer> recentItemIds()

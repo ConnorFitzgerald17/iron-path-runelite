@@ -7,6 +7,7 @@ import java.util.function.Consumer;
 import javax.inject.Inject;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -102,7 +103,8 @@ final class IronPathApiClient
 
     private Request.Builder requestBuilder(String path, String token)
     {
-        String origin = config.apiOrigin().replaceAll("/+$", "");
+        String origin = normalizeApiOrigin(config.apiOrigin());
+        if (origin == null) throw new IllegalStateException("Iron Path API origin must be a valid HTTPS URL");
         Request.Builder builder = new Request.Builder()
             .url(origin + path)
             .header("User-Agent", "IronPath-RuneLite/0.4.2");
@@ -111,6 +113,21 @@ final class IronPathApiClient
             builder.header("Authorization", "Bearer " + token);
         }
         return builder;
+    }
+
+    static String normalizeApiOrigin(String value)
+    {
+        if (value == null) return null;
+        HttpUrl origin = HttpUrl.parse(value.trim());
+        if (origin == null || !"https".equals(origin.scheme())
+            || !origin.username().isEmpty() || !origin.password().isEmpty()
+            || origin.query() != null || origin.fragment() != null)
+        {
+            return null;
+        }
+        String normalized = origin.toString();
+        while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
+        return normalized;
     }
 
     private void post(String path, String token, String json, Consumer<ApiResponse> callback)
